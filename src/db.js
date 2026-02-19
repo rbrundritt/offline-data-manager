@@ -11,8 +11,8 @@
  * fetch-and-store layer with no knowledge of file contents.
  */
 
-const DB_NAME = 'offline-data-manager';
-const DB_VERSION = 1;
+let DB_NAME = 'offline-data-manager';
+let DB_VERSION = 1;
 
 let _db = null;
 
@@ -20,6 +20,16 @@ export const STORES = {
   REGISTRY:       'registry',
   DOWNLOAD_QUEUE: 'downloadQueue',
 };
+
+/**
+ * Overrides the default DB name and version number. 
+ * @param {string|undefined} dbName Optional DB name. Default: 'offline-data-manager'
+ * @param {number|undefined} dbVersion Optional DB version. Default: 1
+ */
+export async function setDBInfo(dbName, dbVersion) {
+  DB_NAME = dbName ?? 'offline-data-manager';
+  DB_VERSION = dbVersion ?? 1;
+}
 
 /**
  * Opens (or returns the cached) database connection.

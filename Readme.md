@@ -2,7 +2,22 @@
 
 A service-worker-friendly library for registering, downloading, and storing files offline using IndexedDB. All files are stored as typed Blobs — the library has no knowledge of file contents. Parsing, decompression, and interpretation are the caller's responsibility.
 
+[Try the sample app](https://rbrundritt.github.io/offline-data-manager/samples/) - Note that all the UI is from the sample app. This library only provides an API interface for managing offline data workflows.
+
 ---
+
+## Features
+
+- Create a register of data to download.
+  - Register items individually or in batches.
+  - Set a priority for each item to ensure more critical data is downloaded first.
+  - Optional mark it protected so that if a delete occurs, the registry persists and will redownload the data the next time download process it triggered.
+  - Optionally set a "time to live" (ttl) value so that data is automatically updated after a period of time. Expired data will persist until updated data has been downloaded, at which point the expired data will be replaced.
+- Downloads data and stores as blobs in `indexedDB`.
+  - Files larger than 5MB are downloaded in 2MB chunks and merged back together when all chunks have been downloaded. This allows for downloads to be interupted and continue without having to start over from the beginning. This is useful if the user refreshes the page or leaves and comes back later.
+  - If a download fails, the retry option will attempt to redownload the data using an expotential backoff method up to 5 tries.
+  - Online/Offline state is monitored. Downloads are paused and resumed based on the state.
+  - Storage limits are monitored and not exceed. This information is also easily retrievable.
 
 ## Setup
 
@@ -32,8 +47,38 @@ Or with any static server you prefer:
 npx serve .                    # then open http://localhost:3000/test/index.html
 python3 -m http.server 3000    # then open http://localhost:3000/test/index.html
 ```
-
 ---
+
+## How to handle retrieved data
+
+Once the data is downloaded, it is stored in `indexedDB` as a `Blob` regardless of the content type. You could check the mimetype if you aren't certain of the type, although that usually shouldn't be the case. Note that the mimetype is only for the main file and not any contents it has. So a Zip file will have a mimetype of `octet-stream` even if it contains a bunch of PNG images which would have a mimetype of `image/png`. As a best practice, when registering the data, add any additional insights you have on the data into the `metadata` option to make it easier to process the data later. Here is some insights on how to get this into a more usable format.
+
+```js
+try {
+  //Check that the file is ready to be access (status: complete or expired))
+  if(await offlineDataManager.retrieve(id)) {
+    //Retrieve the file blob.
+    const myBlob = await offlineDataManager.retrieve(id);
+
+    //Get the data as text.
+    const text = await blob.text();
+
+    //Get the data as json.
+    const json = JSON.parse(text);
+
+    //Get as ArrayBuffer.
+    const buffer = await blob.arrayBuffer();
+
+    //Get as data Url.
+    const dataUrl = URL.createObjectURL(blob);
+
+    //Load the blob into an img tag.
+    document.getElementById('myImage').src = dataUrl;
+  }
+} catch(e) {
+  //If we get here it is likely the file ID is not in the registry or the file hasn't been downloaded yet.
+}
+```
 
 ## File structure
 
@@ -104,6 +149,18 @@ Time-to-live in seconds. On each `downloadFiles()` call, entries whose `complete
 
 ## API
 
+### `setDBInfo(dbName, dbVersion)`
+
+Overrides the default DB name and version number. If used, it should be done before using any other part of this API. By default the database name is `'offline-data-manager'` and the version is 1. 
+
+```js
+//Set the db name and version.
+offlineDataManager.setDBInfo('my-offline-db', 2);
+
+//Set the db version online. Database name will continue to be 'offline-data-manager'.
+offlineDataManager.setDBInfo(null, 2);
+```
+
 ### `registerFile(entry)`
 
 Registers a single file. No-op if version hasn't strictly increased.
@@ -113,7 +170,7 @@ Registers a single file. No-op if version hasn't strictly increased.
 Registers an array of files. Removes non-protected entries absent from the list.
 
 ```js
-const { registered, removed } = await ODM.registerFiles([...]);
+const { registered, removed } = await offlineDataManager.registerFiles([...]);
 ```
 
 ### `downloadFiles(options?)`
@@ -121,7 +178,7 @@ const { registered, removed } = await ODM.registerFiles([...]);
 Evaluates TTL expiry, then downloads all pending/paused/deferred/expired entries. Returns immediately if the browser is offline — downloads resume automatically when connectivity is restored if `startMonitoring()` has been called.
 
 ```js
-await ODM.downloadFiles({ concurrency: 2, resumeOnly: false, retryFailed: false });
+await offlineDataManager.downloadFiles({ concurrency: 2, resumeOnly: false, retryFailed: false });
 ```
 
 - `retryFailed: true` resets all `failed` entries to `pending` before the run, giving them a fresh set of retries. Useful after fixing a broken URL or restoring connectivity after a long outage.
@@ -131,10 +188,10 @@ await ODM.downloadFiles({ concurrency: 2, resumeOnly: false, retryFailed: false 
 Returns the stored `Blob`. Works for both `complete` and `expired` entries.
 
 ```js
-const blob = await ODM.retrieve('json-data');
+const blob = await offlineDataManager.retrieve('json-data');
 const json = JSON.parse(await blob.text());
 
-const mapBlob   = await ODM.retrieve('zip-data');
+const mapBlob   = await offlineDataManager.retrieve('zip-data');
 const mapBuffer = await mapBlob.arrayBuffer(); // Process binary data.
 ```
 
@@ -143,7 +200,7 @@ const mapBuffer = await mapBlob.arrayBuffer(); // Process binary data.
 Returns all entries merged with queue state, plus storage summary.
 
 ```js
-const { items, storage } = await ODM.view();
+const { items, storage } = await offlineDataManager.view();
 // items[n]: { id, mimeType, version, downloadStatus, storedBytes,
 //             bytesDownloaded, progress, completedAt, expiresAt, ... }
 // storage:  { usageBytes, quotaBytes, availableBytes, ...Formatted }
@@ -160,15 +217,15 @@ Returns `true` if the file has a blob available (`complete` or `expired`).
 ### `delete(id, options?)`
 
 ```js
-await ODM.delete('poi-data');                             // respects protected flag
-await ODM.delete('base-map', { removeRegistry: true });   // force full removal
+await offlineDataManager.delete('poi-data');                             // respects protected flag
+await offlineDataManager.delete('base-map', { removeRegistry: true });   // force full removal
 ```
 
 ### `deleteAll(options?)`
 
 ```js
-await ODM.deleteAll();
-await ODM.deleteAll({ removeRegistry: true });
+await offlineDataManager.deleteAll();
+await offlineDataManager.deleteAll({ removeRegistry: true });
 ```
 
 ### `startMonitoring()` / `stopMonitoring()`
@@ -176,8 +233,8 @@ await ODM.deleteAll({ removeRegistry: true });
 Monitors `window` online/offline events. Going offline immediately pauses all active downloads (avoiding wasted retry attempts). Coming back online automatically calls `downloadFiles()` with the same options as the most recent explicit call.
 
 ```js
-ODM.startMonitoring(); // call once after first downloadFiles()
-ODM.stopMonitoring();  // remove listeners (e.g. in tests)
+offlineDataManager.startMonitoring(); // call once after first downloadFiles()
+offlineDataManager.stopMonitoring();  // remove listeners (e.g. in tests)
 ```
 
 Emits a `'connectivity'` event `{ online: boolean }` on every change. `navigator.onLine` can return `true` on a captive portal — actual server reachability is confirmed by whether the subsequent fetch succeeds, and failed fetches retry with backoff as normal.
@@ -185,8 +242,8 @@ Emits a `'connectivity'` event `{ online: boolean }` on every change. `navigator
 ### `isOnline()` / `isMonitoring()`
 
 ```js
-ODM.isOnline();    // → boolean (navigator.onLine)
-ODM.isMonitoring(); // → boolean
+offlineDataManager.isOnline();    // → boolean (navigator.onLine)
+offlineDataManager.isMonitoring(); // → boolean
 ```
 
 
@@ -198,32 +255,32 @@ Resumes `paused` and `in-progress` entries. Call in a service worker `activate` 
 
 ```js
 self.addEventListener('activate', (event) => {
-  event.waitUntil(ODM.resumeInterruptedDownloads());
+  event.waitUntil(offlineDataManager.resumeInterruptedDownloads());
 });
 ```
 
 ### Events
 
 ```js
-const unsub = ODM.on('progress',   ({ id, bytesDownloaded, totalBytes, percent }) => {});
-ODM.on('complete',   ({ id }) => {});
-ODM.on('expired',    ({ id }) => {});
-ODM.on('error',      ({ id, error, retryCount, willRetry }) => {});
-ODM.on('deferred',   ({ id, reason }) => {});
-ODM.on('registered', ({ id, reason }) => {}); // reason: 'new' | 'version-updated'
-ODM.on('deleted',    ({ id, registryRemoved }) => {});
-ODM.on('status',     ({ id, status }) => {});
+const unsub = offlineDataManager.on('progress',   ({ id, bytesDownloaded, totalBytes, percent }) => {});
+offlineDataManager.on('complete',   ({ id }) => {});
+offlineDataManager.on('expired',    ({ id }) => {});
+offlineDataManager.on('error',      ({ id, error, retryCount, willRetry }) => {});
+offlineDataManager.on('deferred',   ({ id, reason }) => {});
+offlineDataManager.on('registered', ({ id, reason }) => {}); // reason: 'new' | 'version-updated'
+offlineDataManager.on('deleted',    ({ id, registryRemoved }) => {});
+offlineDataManager.on('status',     ({ id, status }) => {});
 
-ODM.once('complete', ({ id }) => {});
+offlineDataManager.once('complete', ({ id }) => {});
 unsub(); // remove listener
 ```
 
 ### Storage
 
 ```js
-const { usage, quota, available } = await ODM.getStorageEstimate();
-await ODM.requestPersistentStorage();
-await ODM.isPersistentStorage();
+const { usage, quota, available } = await offlineDataManager.getStorageEstimate();
+await offlineDataManager.requestPersistentStorage();
+await offlineDataManager.isPersistentStorage();
 ```
 
 ---

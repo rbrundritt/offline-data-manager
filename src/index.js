@@ -128,7 +128,7 @@ import {
   isPersistentStorage,
 } from './storage.js';
 
-import { dbGet, STORES } from './db.js';
+import { setDBInfo, dbGet, STORES } from './db.js';
 import { READY_STATUSES } from './registry.js';
 
 /**
@@ -164,6 +164,10 @@ async function retrieve(id) {
 // ─── Public API object ────────────────────────────────────────────────────────
 
 const OfflineDataManager = {
+  // ── DB ──────────────────────────────────────────────────────────────────────
+
+  /** Overrides the default DB name and version number.  */
+  setDBInfo,
 
   // ── Registry ────────────────────────────────────────────────────────────────
 

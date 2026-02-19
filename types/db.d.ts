@@ -1,4 +1,10 @@
 /**
+ * Overrides the default DB name and version number.
+ * @param {string|undefined} dbName Optional DB name. Default: 'offline-data-manager'
+ * @param {number|undefined} dbVersion Optional DB version. Default: 1
+ */
+export function setDBInfo(dbName: string | undefined, dbVersion: number | undefined): Promise<void>;
+/**
  * Opens (or returns the cached) database connection.
  * @returns {Promise<IDBDatabase>}
  */

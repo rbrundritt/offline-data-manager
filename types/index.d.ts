@@ -1,5 +1,6 @@
 export default OfflineDataManager;
 declare namespace OfflineDataManager {
+    export { setDBInfo };
     export { registerFile };
     export { registerFiles };
     export { downloadFiles };
@@ -57,4 +58,5 @@ import { emit } from './events.js';
 import { getStorageEstimate } from './storage.js';
 import { requestPersistentStorage } from './storage.js';
 import { isPersistentStorage } from './storage.js';
+import { setDBInfo } from './db.js';
 export { registerFile, registerFiles, downloadFiles, abortDownload, abortAllDownloads, resumeInterruptedDownloads, startMonitoring, stopMonitoring, isOnline, isMonitoring, view, getStatus, isReady, deleteFile, deleteAllFiles, on, off, once, emit, getStorageEstimate, requestPersistentStorage, isPersistentStorage };
