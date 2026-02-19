@@ -14,7 +14,7 @@ npm install offline-data-manager
 
 ### Browser (without modules)
 
-Copy and host the [dist/umd/offline-data-manager.js](dist/umd/offline-data-manager.js) file then add a script tag in your webapp pointing to this file. A global `offlineDataManager` class will be available in JavaScript.
+Download and host the [dist/umd/offline-data-manager.js](dist/umd/offline-data-manager.js) file then add a script tag in your webapp pointing to this file. A global `offlineDataManager` class will be available in JavaScript.
 
 ## Running the test harness
 
