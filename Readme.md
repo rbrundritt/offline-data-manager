@@ -4,6 +4,9 @@ A service-worker-friendly library for registering, downloading, and storing file
 
 [Try the sample app](https://rbrundritt.github.io/offline-data-manager/samples/) - Note that all the UI is from the sample app. This library only provides an API interface for managing offline data workflows.
 
+> [!NOTE]
+> Since this code runs in JavaScript and will most likely be used within a website, the data it accesses either needs to be on the same domain or hosted on a server with CORS enabled. Alternatively, you can pass cross domain requests through a CORS enabled proxy.
+
 ---
 
 ## Features
