@@ -4,6 +4,18 @@ A service-worker-friendly library for registering, downloading, and storing file
 
 ---
 
+## Setup
+
+### With NPM Modules
+
+```bash
+npm install offline-data-manager
+```
+
+### Browser (without modules)
+
+Copy and host the [dist/umd/offline-data-manager.js](dist/umd/offline-data-manager.js) file then add a script tag in your webapp pointing to this file. A global `offlineDataManager` class will be available in JavaScript.
+
 ## Running the test harness
 
 The test harness imports directly from `src/index.js` using ES modules, so it requires a local HTTP server (browsers block module imports from `file://`).

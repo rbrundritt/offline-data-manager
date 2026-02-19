@@ -5,8 +5,8 @@
   "type": "module",
   "main": "dist/umd/offline-data-manager.js",
   "module": "dist/esm/offline-data-manager.js",
-  "sideEffects": false,
   "browser": "dist/umd/offline-data-manager.js",
+  "sideEffects": false,
   "types": "types/index.d.ts",
   "exports": {
     ".": {
