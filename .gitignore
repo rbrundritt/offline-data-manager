@@ -3,9 +3,6 @@ node_modules/
 package-lock.json
 yarn.lock
 
-# Distribution
-dist/
-
 # IDE and editor files
 .vscode/
 .idea/
