@@ -1,0 +1,374 @@
+/**
+ * registry.js
+ * Manages the file registry and download queue state.
+ *
+ * Registry entry shape:
+ * {
+ *   id:           string        — unique identifier
+ *   downloadUrl:  string        — URL to fetch
+ *   mimeType:     string|null   — MIME type for the stored Blob; null means infer from
+ *                                 Content-Type response header at download time
+ *   version:      number        — incrementing integer; re-download when strictly increased
+ *   protected:    boolean  — if true, registry entry survives deletion and data is
+ *                            re-downloaded on next downloadFiles() call
+ *   priority:     number   — lower = higher priority (default: 10)
+ *   ttl:          number   — time-to-live in seconds; 0 or omitted means never expires
+ *   totalBytes:   number|null — optional size hint for storage checks and progress display
+ *   metadata:     object   — arbitrary caller-supplied key/value pairs (labels, descriptions, etc.)
+ *   registeredAt: number   — timestamp (ms)
+ *   updatedAt:    number   — timestamp of last metadata update (ms)
+ * }
+ *
+ * Download queue entry shape:
+ * {
+ *   id:              string         — matches registry id
+ *   status:          string         — see DOWNLOAD_STATUS below
+ *   blob:            Blob|null      — stored file data; null until download completes
+ *   bytesDownloaded: number
+ *   totalBytes:      number|null
+ *   byteOffset:      number         — for Range request resume
+ *   retryCount:      number
+ *   lastAttemptAt:   number|null    — timestamp (ms)
+ *   errorMessage:    string|null
+ *   deferredReason:  string|null
+ *   completedAt:     number|null    — timestamp (ms); used for TTL expiry calculation
+ *   expiresAt:       number|null    — timestamp (ms); set from completedAt + ttl on completion
+ * }
+ *
+ * Status values:
+ *   pending     — waiting to be downloaded
+ *   in-progress — actively downloading
+ *   paused      — aborted mid-download; resumes on next downloadFiles()
+ *   complete    — fully downloaded; blob is available
+ *   expired     — download was complete but TTL has elapsed; blob still available
+ *                 and is replaced (not removed) when the new download completes
+ *   failed      — download exhausted all retries
+ *   deferred    — skipped due to insufficient storage; re-evaluated next run
+ */
+
+import { dbGet, dbGetAll, dbPut, dbDelete, STORES } from './db.js';
+import { emit } from './events.js';
+import { getStorageEstimate, formatBytes } from './storage.js';
+
+export const DOWNLOAD_STATUS = {
+  PENDING:     'pending',
+  IN_PROGRESS: 'in-progress',
+  PAUSED:      'paused',
+  COMPLETE:    'complete',
+  EXPIRED:     'expired',
+  FAILED:      'failed',
+  DEFERRED:    'deferred',
+};
+
+// Statuses where the blob is present and accessible
+export const READY_STATUSES = new Set([
+  DOWNLOAD_STATUS.COMPLETE,
+  DOWNLOAD_STATUS.EXPIRED,
+]);
+
+// ─── Validation ───────────────────────────────────────────────────────────────
+
+function validateEntry(entry) {
+  if (!entry || typeof entry !== 'object') {
+    throw new Error('Registry entry must be an object.');
+  }
+  if (!entry.id || typeof entry.id !== 'string') {
+    throw new Error('Registry entry must have a string "id".');
+  }
+  if (!entry.downloadUrl || typeof entry.downloadUrl !== 'string') {
+    throw new Error(`Entry "${entry.id}" must have a string "downloadUrl".`);
+  }
+  if (entry.mimeType !== undefined && entry.mimeType !== null && typeof entry.mimeType !== 'string') {
+    throw new Error(`Entry "${entry.id}" mimeType must be a string or omitted.`);
+  }
+  if (typeof entry.version !== 'number' || !Number.isInteger(entry.version) || entry.version < 0) {
+    throw new Error(`Entry "${entry.id}" version must be a non-negative integer.`);
+  }
+  if (entry.ttl !== undefined && (typeof entry.ttl !== 'number' || entry.ttl < 0)) {
+    throw new Error(`Entry "${entry.id}" ttl must be a non-negative number (seconds).`);
+  }
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+function makeQueueEntry(id) {
+  return {
+    id,
+    status:          DOWNLOAD_STATUS.PENDING,
+    blob:            null,
+    bytesDownloaded: 0,
+    totalBytes:      null,
+    byteOffset:      0,
+    retryCount:      0,
+    lastAttemptAt:   null,
+    errorMessage:    null,
+    deferredReason:  null,
+    completedAt:     null,
+    expiresAt:       null,
+  };
+}
+
+/**
+ * Computes the expiresAt timestamp from a completedAt time and a ttl (seconds).
+ * Returns null if ttl is absent, zero, or falsy (meaning never expires).
+ *
+ * @param {number} completedAt — ms timestamp
+ * @param {number|undefined} ttl — seconds
+ * @returns {number|null}
+ */
+export function computeExpiresAt(completedAt, ttl) {
+  if (!ttl) return null;
+  return completedAt + ttl * 1000;
+}
+
+/**
+ * Returns true if an expiresAt timestamp has passed.
+ * @param {number|null} expiresAt
+ * @returns {boolean}
+ */
+export function isExpired(expiresAt) {
+  if (!expiresAt) return false;
+  return Date.now() >= expiresAt;
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/**
+ * Registers a single file entry.
+ *
+ * - New entry: added to registry, fresh pending queue entry created.
+ * - Existing, version increased: registry updated, queue reset to pending.
+ *   Existing blob remains accessible until the new download completes.
+ * - Existing, version unchanged or lower: no-op.
+ *
+ * @param {object} entry
+ * @returns {Promise<void>}
+ */
+export async function registerFile(entry) {
+  validateEntry(entry);
+
+  const now      = Date.now();
+  const existing = await dbGet(STORES.REGISTRY, entry.id);
+  const existingQueue = await dbGet(STORES.DOWNLOAD_QUEUE, entry.id);
+
+  const registryRecord = {
+    id:          entry.id,
+    downloadUrl: entry.downloadUrl,
+    mimeType:    entry.mimeType    ?? null,
+    version:     entry.version,
+    protected:   entry.protected  ?? false,
+    priority:    entry.priority   ?? 10,
+    ttl:         entry.ttl        ?? 0,
+    totalBytes:  entry.totalBytes ?? null,
+    metadata:    entry.metadata   ?? {},
+    registeredAt: existing?.registeredAt ?? now,
+    updatedAt:    now,
+  };
+
+  if (existing) {
+    if (entry.version > existing.version) {
+      await dbPut(STORES.REGISTRY, registryRecord);
+
+      // Preserve the existing blob while re-queuing so data stays accessible
+      const newQueueEntry = existingQueue
+        ? {
+            ...existingQueue,
+            status:          DOWNLOAD_STATUS.PENDING,
+            bytesDownloaded: 0,
+            byteOffset:      0,
+            retryCount:      0,
+            errorMessage:    null,
+            deferredReason:  null,
+            completedAt:     null,
+            expiresAt:       null,
+            // blob intentionally kept so retrieve() still works during re-download
+          }
+        : makeQueueEntry(entry.id);
+
+      await dbPut(STORES.DOWNLOAD_QUEUE, newQueueEntry);
+      emit('registered', { id: entry.id, reason: 'version-updated' });
+    }
+    // Version unchanged or lower — no-op
+    return;
+  }
+
+  // Brand new entry
+  await dbPut(STORES.REGISTRY, registryRecord);
+  await dbPut(STORES.DOWNLOAD_QUEUE, makeQueueEntry(entry.id));
+  emit('registered', { id: entry.id, reason: 'new' });
+}
+
+/**
+ * Registers an array of file entries and removes any registry entries
+ * whose IDs are no longer present in the incoming array.
+ *
+ * Protected entries missing from the new list are left untouched.
+ * Non-protected entries missing from the new list are fully removed.
+ *
+ * @param {object[]} entries
+ * @returns {Promise<{ registered: string[], removed: string[] }>}
+ */
+export async function registerFiles(entries) {
+  if (!Array.isArray(entries)) {
+    throw new Error('registerFiles expects an array.');
+  }
+
+  const incomingIds  = new Set(entries.map((e) => e.id));
+  const existingAll  = await dbGetAll(STORES.REGISTRY);
+  const removed      = [];
+
+  for (const existing of existingAll) {
+    if (!incomingIds.has(existing.id) && !existing.protected) {
+      await dbDelete(STORES.REGISTRY, existing.id);
+      await dbDelete(STORES.DOWNLOAD_QUEUE, existing.id);
+      removed.push(existing.id);
+      emit('deleted', { id: existing.id, registryRemoved: true });
+    }
+  }
+
+  for (const entry of entries) {
+    await registerFile(entry);
+  }
+
+  return { registered: entries.map((e) => e.id), removed };
+}
+
+/**
+ * Checks all complete queue entries against their TTL and flips any that have
+ * expired to `expired` status, queuing them for re-download.
+ *
+ * Called internally by downloadFiles() before deciding what to download.
+ * @returns {Promise<string[]>} IDs of entries that were marked expired
+ */
+export async function evaluateExpiry() {
+  const allQueue    = await dbGetAll(STORES.DOWNLOAD_QUEUE);
+  const expiredIds  = [];
+
+  for (const entry of allQueue) {
+    if (entry.status === DOWNLOAD_STATUS.COMPLETE && isExpired(entry.expiresAt)) {
+      await dbPut(STORES.DOWNLOAD_QUEUE, {
+        ...entry,
+        status: DOWNLOAD_STATUS.EXPIRED,
+      });
+      expiredIds.push(entry.id);
+      emit('expired', { id: entry.id });
+    }
+  }
+
+  return expiredIds;
+}
+
+/**
+ * Returns a merged view of all registry entries with their current download
+ * state, plus a storage summary.
+ *
+ * @returns {Promise<{ items: object[], storage: object }>}
+ */
+export async function view() {
+  const [registryEntries, queueEntries, storageEstimate] = await Promise.all([
+    dbGetAll(STORES.REGISTRY),
+    dbGetAll(STORES.DOWNLOAD_QUEUE),
+    getStorageEstimate(),
+  ]);
+
+  const queueMap = new Map(queueEntries.map((q) => [q.id, q]));
+
+  const items = registryEntries
+    .map((reg) => {
+      const queue = queueMap.get(reg.id) ?? null;
+      return {
+        // Registry fields
+        id:          reg.id,
+        downloadUrl: reg.downloadUrl,
+        mimeType:    reg.mimeType ?? queue?.blob?.type ?? null, // null means infer at download time
+        version:     reg.version,
+        protected:   reg.protected,
+        priority:    reg.priority,
+        ttl:         reg.ttl,
+        totalBytes:  reg.totalBytes,
+        metadata:    reg.metadata,
+        registeredAt: reg.registeredAt,
+        updatedAt:    reg.updatedAt,
+        // Queue fields
+        downloadStatus:  queue?.status          ?? null,
+        bytesDownloaded: queue?.bytesDownloaded ?? 0,
+        storedBytes:     queue?.blob?.size      ?? null,
+        progress:        (queue?.totalBytes && queue?.bytesDownloaded)
+          ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
+          : null,
+        retryCount:      queue?.retryCount      ?? 0,
+        lastAttemptAt:   queue?.lastAttemptAt   ?? null,
+        errorMessage:    queue?.errorMessage    ?? null,
+        deferredReason:  queue?.deferredReason  ?? null,
+        completedAt:     queue?.completedAt     ?? null,
+        expiresAt:       queue?.expiresAt       ?? null,
+      };
+    })
+    .sort((a, b) => a.priority - b.priority);
+
+  return {
+    items,
+    storage: {
+      usageBytes:       storageEstimate.usage,
+      quotaBytes:       storageEstimate.quota,
+      availableBytes:   storageEstimate.available,
+      usageFormatted:   formatBytes(storageEstimate.usage),
+      quotaFormatted:   formatBytes(storageEstimate.quota),
+      availableFormatted: formatBytes(storageEstimate.available),
+    },
+  };
+}
+
+/**
+ * Returns the full merged status object for a single registered file,
+ * or null if not registered.
+ *
+ * @param {string} id
+ * @returns {Promise<object|null>}
+ */
+export async function getStatus(id) {
+  const [reg, queue] = await Promise.all([
+    dbGet(STORES.REGISTRY, id),
+    dbGet(STORES.DOWNLOAD_QUEUE, id),
+  ]);
+
+  if (!reg) return null;
+
+  return {
+    id:          reg.id,
+    downloadUrl: reg.downloadUrl,
+    mimeType:    reg.mimeType ?? queue?.blob?.type ?? null,
+    version:     reg.version,
+    protected:   reg.protected,
+    priority:    reg.priority,
+    ttl:         reg.ttl,
+    totalBytes:  reg.totalBytes,
+    metadata:    reg.metadata,
+    registeredAt: reg.registeredAt,
+    updatedAt:    reg.updatedAt,
+    downloadStatus:  queue?.status          ?? null,
+    bytesDownloaded: queue?.bytesDownloaded ?? 0,
+    storedBytes:     queue?.blob?.size      ?? null,
+    progress:        (queue?.totalBytes && queue?.bytesDownloaded)
+      ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
+      : null,
+    retryCount:      queue?.retryCount      ?? 0,
+    lastAttemptAt:   queue?.lastAttemptAt   ?? null,
+    errorMessage:    queue?.errorMessage    ?? null,
+    deferredReason:  queue?.deferredReason  ?? null,
+    completedAt:     queue?.completedAt     ?? null,
+    expiresAt:       queue?.expiresAt       ?? null,
+  };
+}
+
+/**
+ * Returns true if a file has data available (complete or expired).
+ * An expired file still has a valid blob — it is simply due for refresh.
+ *
+ * @param {string} id
+ * @returns {Promise<boolean>}
+ */
+export async function isReady(id) {
+  const queue = await dbGet(STORES.DOWNLOAD_QUEUE, id);
+  return READY_STATUSES.has(queue?.status);
+}

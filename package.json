@@ -1,0 +1,43 @@
+{
+  "name": "offline-data-manager",
+  "version": "1.0.0",
+  "description": "Service-worker-friendly offline file download and storage manager for JavaScript.",
+  "type": "module",
+  "main": "dist/umd/offline-data-manager.js",
+  "module": "dist/esm/offline-data-manager.js",
+  "sideEffects": false,
+  "browser": "dist/umd/offline-data-manager.js",
+  "types": "types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/offline-data-manager.js",
+      "require": "./dist/umd/offline-data-manager.js"
+    }
+  },
+  "files": [
+    "dist",
+    "types",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build/build.js",
+    "build:types": "tsc",
+    "prepublishOnly": "npm run build && npm run build:types"
+  },
+  "keywords": [
+    "offline",
+    "browser",
+    "indexeddb",
+    "download",
+    "cache"
+  ],
+  "devDependencies": {
+    "esbuild": "^0.27.3"
+  },
+  "author": "Ricky Brundritt",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rbrundritt/offline-data-manager"
+  }
+}

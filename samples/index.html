@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>offline-data-manager / test harness</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0d0f12;
+    --surface:   #141720;
+    --surface2:  #1c2030;
+    --border:    #252a38;
+    --border2:   #2e3448;
+    --text:      #c8cdd8;
+    --text-dim:  #c8cdd8;
+    --text-muted:#3a4055;
+    --accent:    #4af2a1;
+    --accent-dim:#1a5c3e;
+    --warn:      #f2c94c;
+    --warn-dim:  #5c4a1a;
+    --error:     #f25f4c;
+    --error-dim: #5c1a14;
+    --info:      #4c9ef2;
+    --info-dim:  #1a3a5c;
+    --mono: 'IBM Plex Mono', monospace;
+  }
+
+  html { font-size: 13px; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  .app { display: grid; grid-template-rows: auto 1fr; min-height: 100vh; }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .header-left { display: flex; align-items: center; gap: 14px; }
+
+  .logo { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+  .logo span { color: var(--text-dim); font-weight: 300; }
+
+  .badge { font-size: 10px; padding: 2px 7px; border: 1px solid var(--border2); border-radius: 2px; color: var(--text-dim); }
+
+  #idb-status { font-size: 10px; display: flex; align-items: center; gap: 5px; }
+  #connectivity-status { font-size: 10px; display: flex; align-items: center; gap: 5px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .dot-ok { background: var(--accent); } .dot-warn { background: var(--warn); } .dot-error { background: var(--error); } .dot-idle { background: var(--text-muted); }
+
+  .storage-wrap { display: flex; align-items: center; gap: 10px; font-size: 10px; color: var(--text-dim); }
+  .storage-bar { width: 120px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .storage-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.4s; width: 0%; }
+
+  .main { display: grid; grid-template-columns: 360px 1fr 300px; height: calc(100vh - 45px); }
+
+  /* ── Panels ── */
+  .panel { border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+  .panel:last-child { border-right: none; }
+
+  .panel-header { padding: 9px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--surface); flex-shrink: 0; }
+  .panel-title { font-size: 10px; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-dim); }
+
+  .panel-body { flex: 1; overflow-y: auto; padding: 16px; scrollbar-width: thin; scrollbar-color: var(--border2) transparent; }
+  .panel-body::-webkit-scrollbar { width: 4px; }
+  .panel-body::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 16px; background: var(--surface); flex-shrink: 0; }
+  .tab { padding: 9px 12px; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color 0.15s, border-color 0.15s; user-select: none; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* ── Form elements ── */
+  .field { margin-bottom: 11px; }
+  label { display: block; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 4px; }
+  input[type=text], input[type=number], input[type=url], select, textarea {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border2); border-radius: 3px;
+    color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none; transition: border-color 0.15s; appearance: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 80px; line-height: 1.6; }
+  select { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a6278'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+  /* ── Toggle ── */
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; }
+  .toggle-label { font-size: 11px; color: var(--text); }
+  .toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track { position: absolute; inset: 0; background: var(--border2); border-radius: 9px; cursor: pointer; transition: background 0.2s; }
+  .toggle-track::after { content: ''; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-dim); transition: transform 0.2s, background 0.2s; }
+  .toggle input:checked + .toggle-track { background: var(--accent-dim); }
+  .toggle input:checked + .toggle-track::after { transform: translateX(14px); background: var(--accent); }
+
+  /* ── Buttons ── */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 3px; border: 1px solid transparent; font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.06em; cursor: pointer; transition: all 0.15s; text-transform: uppercase; white-space: nowrap; }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-primary { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-dim); }
+  .btn-primary:not(:disabled):hover { background: var(--accent); color: var(--bg); }
+  .btn-ghost { background: transparent; color: var(--text-dim); border-color: var(--border2); }
+  .btn-ghost:not(:disabled):hover { color: var(--text); border-color: var(--border); }
+  .btn-danger { background: transparent; color: var(--error); border-color: var(--error-dim); }
+  .btn-danger:not(:disabled):hover { background: var(--error-dim); }
+  .btn-warn { background: transparent; color: var(--warn); border-color: var(--warn-dim); }
+  .btn-warn:not(:disabled):hover { background: var(--warn-dim); }
+  .btn-full { width: 100%; justify-content: center; }
+  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ── Section ── */
+  .section { margin-bottom: 20px; }
+  .section-title { font-size: 10px; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+
+  /* ── Slider ── */
+  .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  input[type=range] { flex: 1; appearance: none; height: 3px; background: var(--border2); border-radius: 2px; outline: none; cursor: pointer; }
+  input[type=range]::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .slider-val { font-size: 12px; font-weight: 600; color: var(--accent); width: 16px; text-align: center; }
+
+  /* ── File cards ── */
+  #file-list { display: flex; flex-direction: column; gap: 8px; }
+  .file-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 12px; animation: cardIn 0.2s ease; }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+  .file-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+  .file-id { font-size: 12px; font-weight: 600; color: var(--text); word-break: break-all; }
+
+  .file-meta { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tag { font-size: 9px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 6px; border-radius: 2px; border: 1px solid; }
+  .tag-mime    { color: var(--info);  border-color: var(--info-dim);  background: rgba(76,158,242,0.06); }
+  .tag-protect { color: var(--accent); border-color: var(--accent-dim); background: rgba(74,242,161,0.06); }
+  .tag-user    { color: var(--warn); border-color: var(--warn-dim); background: rgba(242,201,76,0.06); }
+  .tag-v       { color: var(--text-dim); border-color: var(--border); }
+  .tag-ttl     { color: var(--text-dim); border-color: var(--border); }
+  .tag-pri     { color: var(--text-dim); border-color: var(--border); }
+
+  .status-pill { font-size: 9px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 7px; border-radius: 10px; border: 1px solid; white-space: nowrap; flex-shrink: 0; }
+  .pill-pending     { color: var(--text-dim);  border-color: var(--border2); }
+  .pill-in-progress { color: var(--info);       border-color: var(--info-dim);   background: rgba(76,158,242,0.08); }
+  .pill-complete    { color: var(--accent);     border-color: var(--accent-dim);  background: rgba(74,242,161,0.08); }
+  .pill-expired     { color: var(--warn);       border-color: var(--warn-dim);    background: rgba(242,201,76,0.08); }
+  .pill-failed      { color: var(--error);      border-color: var(--error-dim);   background: rgba(242,95,76,0.08); }
+  .pill-deferred    { color: var(--warn);       border-color: var(--warn-dim); }
+  .pill-paused      { color: var(--warn);       border-color: var(--warn-dim); }
+
+  .progress-wrap { margin-bottom: 6px; }
+  .progress-info { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); margin-bottom: 4px; }
+  .progress-track { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 2px; transition: width 0.3s; width: 0%; }
+  .progress-fill.status-complete    { background: var(--accent); }
+  .progress-fill.status-expired     { background: var(--warn); }
+  .progress-fill.status-in-progress { background: var(--info); }
+  .progress-fill.status-failed      { background: var(--error); }
+  .progress-fill.status-deferred    { background: var(--warn); }
+  .progress-fill.status-pending     { background: var(--text-muted); }
+  .progress-fill.status-paused      { background: var(--warn); }
+
+  .expiry-info { font-size: 10px; color: var(--text-dim); margin-bottom: 5px; }
+  .expiry-info.is-expired { color: var(--warn); }
+
+  .file-card-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+  /* ── Result / view output ── */
+  .result-box { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 10px; font-size: 11px; color: var(--accent); margin-top: 10px; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; display: none; }
+  .result-box.visible { display: block; }
+  .result-box.is-error { color: var(--error); }
+  #view-output { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 10px; font-size: 10px; color: var(--text-dim); white-space: pre; overflow: auto; max-height: 280px; line-height: 1.7; }
+
+  /* ── Notice ── */
+  .notice { padding: 7px 10px; border-radius: 3px; font-size: 11px; margin-bottom: 10px; border-left: 3px solid; animation: cardIn 0.15s ease; }
+  .notice-ok    { background: rgba(74,242,161,0.06);  border-color: var(--accent); color: var(--accent); }
+  .notice-error { background: rgba(242,95,76,0.06);   border-color: var(--error);  color: var(--error); }
+  .notice-info  { background: rgba(76,158,242,0.06);  border-color: var(--info);   color: var(--info); }
+
+  /* ── Event log ── */
+  .log-entry { display: grid; grid-template-columns: 65px 80px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; animation: logIn 0.15s ease; }
+  @keyframes logIn { from { opacity: 0; background: rgba(74,242,161,0.04); } to { opacity: 1; } }
+  .log-time  { color: var(--text-muted); font-size: 10px; padding-top: 1px; }
+  .log-event { font-weight: 500; }
+  .log-event.ev-progress   { color: var(--info); }
+  .log-event.ev-complete   { color: var(--accent); }
+  .log-event.ev-error      { color: var(--error); }
+  .log-event.ev-deferred   { color: var(--warn); }
+  .log-event.ev-expired    { color: var(--warn); }
+  .log-event.ev-registered { color: var(--text-dim); }
+  .log-event.ev-deleted    { color: var(--error); }
+  .log-event.ev-status     { color: var(--text-dim); }
+  .log-data { color: var(--text-dim); word-break: break-all; }
+  .log-empty { color: var(--text-muted); font-size: 11px; padding: 20px 0; text-align: center; }
+
+  .empty-state { color: var(--text-muted); font-size: 11px; text-align: center; padding: 28px 0; }
+  .dimtext { color: var(--text-dim); font-size: 11px; }
+  .mt-8  { margin-top: 8px; }
+  .mt-12 { margin-top: 12px; }
+  .mb-10 { margin-bottom: 10px; }
+  .mb-12 { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="header-left">
+      <div class="logo">offline-data-manager <span>/ test harness</span></div>
+      <div class="badge">v3.1</div>
+      <div id="idb-status">
+        <span class="dot dot-idle" id="idb-dot"></span>
+        <span id="idb-text">indexeddb</span>
+      </div>
+      <div id="connectivity-status">
+        <span class="dot dot-idle" id="conn-dot"></span>
+        <span id="conn-text">network</span>
+      </div>
+    </div>
+    <div class="storage-wrap">
+      <span id="storage-label">storage: —</span>
+      <div class="storage-bar"><div class="storage-fill" id="storage-fill"></div></div>
+    </div>
+  </header>
+
+  <div class="main">
+
+    <!-- Panel 1: Controls -->
+    <div class="panel">
+      <div class="panel-header"><span class="panel-title">Controls</span></div>
+      <div class="tabs">
+        <div class="tab active" data-tab="register">Register</div>
+        <div class="tab" data-tab="download">Download</div>
+        <div class="tab" data-tab="retrieve">Retrieve</div>
+        <div class="tab" data-tab="manage">Manage</div>
+      </div>
+      <div class="panel-body" id="controls-body">
+
+        <!-- Register tab -->
+        <div class="tab-content active" id="tab-register">
+          <div class="section">
+            <div class="section-title">Register Single File</div>
+            <div class="field"><label>ID</label><input type="text" id="reg-id" value="test-json"></div>
+            <div class="field"><label>Download URL</label><input type="url" id="reg-url" value="https://jsonplaceholder.typicode.com/todos"></div>
+            <div class="field"><label>MIME Type <span style="color:var(--text-muted);font-size:9px;text-transform:none">(optional — inferred if blank)</span></label><input type="text" id="reg-mime" placeholder="e.g. application/json, image/png"></div>
+            <div class="row">
+              <div class="field"><label>Version</label><input type="number" id="reg-version" value="1" min="0"></div>
+              <div class="field"><label>Priority</label><input type="number" id="reg-priority" value="10" min="1"></div>
+            </div>
+            <div class="field"><label>TTL (seconds, 0 = never)</label><input type="number" id="reg-ttl" value="0" min="0"></div>
+            <div class="field"><label>Total Bytes (optional hint)</label><input type="number" id="reg-totalbytes" placeholder="leave blank if unknown"></div>
+            <div class="toggle-row mb-12">
+              <span class="toggle-label">Protected</span>
+              <label class="toggle"><input type="checkbox" id="reg-protected" checked><span class="toggle-track"></span></label>
+            </div>
+            <button class="btn btn-primary btn-full" id="btn-register-one">＋ Register File</button>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Register Batch (JSON Array)</div>
+            <div class="field">
+              <textarea id="batch-json" rows="7">[
+  {
+    "id": "posts",
+    "downloadUrl": "https://jsonplaceholder.typicode.com/posts",
+    "mimeType": "application/json",
+    "version": 1,
+    "protected": false,
+    "priority": 5,
+    "ttl": 3600
+  },
+  {
+    "id": "users",
+    "downloadUrl": "https://jsonplaceholder.typicode.com/users",
+    "version": 1,
+    "protected": true,
+    "priority": 3,
+    "ttl": 86400
+  }
+]</textarea>
+            </div>
+            <button class="btn btn-ghost btn-full" id="btn-register-batch">＋ Register Batch</button>
+          </div>
+        </div>
+
+        <!-- Download tab -->
+        <div class="tab-content" id="tab-download">
+          <div class="section">
+            <div class="section-title">Download Options</div>
+            <div class="slider-row">
+              <label style="margin:0;width:90px">Concurrency</label>
+              <input type="range" id="concurrency" min="1" max="6" value="2">
+              <span class="slider-val" id="concurrency-val">2</span>
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">Resume Only</span>
+              <label class="toggle"><input type="checkbox" id="resume-only"><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row mb-12">
+              <span class="toggle-label">Retry Failed</span>
+              <label class="toggle"><input type="checkbox" id="retry-failed"><span class="toggle-track"></span></label>
+            </div>
+            <button class="btn btn-primary btn-full" id="btn-download">▶ Start Downloads</button>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Connectivity Monitor</div>
+            <div class="dimtext mb-10">Pauses downloads when offline, resumes automatically when online.</div>
+            <div class="btn-group">
+              <button class="btn btn-ghost" id="btn-start-monitor">▶ Start</button>
+              <button class="btn btn-ghost" id="btn-stop-monitor">■ Stop</button>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Abort</div>
+            <div class="field"><label>ID (blank = abort all)</label><input type="text" id="abort-id" placeholder="leave blank for all"></div>
+            <button class="btn btn-warn btn-full" id="btn-abort">■ Abort</button>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Resume Interrupted</div>
+            <div class="dimtext mb-10">Simulates SW activation — resumes paused / in-progress downloads.</div>
+            <button class="btn btn-ghost btn-full" id="btn-resume-sw">↺ Resume Interrupted</button>
+          </div>
+        </div>
+
+        <!-- Retrieve tab -->
+        <div class="tab-content" id="tab-retrieve">
+          <div class="section">
+            <div class="section-title">Retrieve Blob</div>
+            <div class="field"><label>ID</label><input type="text" id="ret-id" placeholder="registered file id"></div>
+            <button class="btn btn-primary btn-full mt-8" id="btn-retrieve">⤓ Retrieve</button>
+            <pre class="result-box" id="retrieve-result"></pre>
+          </div>
+        </div>
+
+        <!-- Manage tab -->
+        <div class="tab-content" id="tab-manage">
+          <div class="section">
+            <div class="section-title">Delete</div>
+            <div class="field"><label>ID (blank = delete all)</label><input type="text" id="del-id" placeholder="leave blank for all"></div>
+            <div class="toggle-row mb-12">
+              <span class="toggle-label">Remove Registry</span>
+              <label class="toggle"><input type="checkbox" id="del-remove-registry"><span class="toggle-track"></span></label>
+            </div>
+            <button class="btn btn-danger btn-full" id="btn-delete">✕ Delete</button>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Status Check</div>
+            <div class="field"><label>ID</label><input type="text" id="status-id" placeholder="file id"></div>
+            <div class="btn-group mb-10">
+              <button class="btn btn-ghost" id="btn-isready">isReady()</button>
+              <button class="btn btn-ghost" id="btn-getstatus">getStatus()</button>
+            </div>
+            <pre class="result-box" id="status-result"></pre>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Storage</div>
+            <button class="btn btn-ghost btn-full" id="btn-persist">Request Persistent Storage</button>
+            <div class="dimtext mt-8" id="persist-status"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Panel 2: Registry -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Registry</span>
+        <button class="btn btn-ghost" id="btn-view" style="padding:3px 10px;font-size:10px">↻ Refresh</button>
+      </div>
+      <div class="panel-body">
+        <div id="file-list">
+          <div class="empty-state">No files registered.<br>Use the Controls panel to get started.</div>
+        </div>
+        <div class="section mt-12">
+          <div class="section-title">view() Output</div>
+          <pre id="view-output">—</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel 3: Event Log -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Event Log</span>
+        <button class="btn btn-ghost" id="btn-clear-log" style="padding:3px 10px;font-size:10px">Clear</button>
+      </div>
+      <div class="panel-body">
+        <div id="event-log"><div class="log-empty">Awaiting events…</div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script type="module">
+// ─── Import the actual library ────────────────────────────────────────────────
+// Requires a local dev server (e.g. `npx serve .` or `npx vite` from the
+// offline-data-manager-v3 directory).
+import ODM from '../src/index.js';
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+function formatBytes(b) {
+  if (b === Infinity) return '∞';
+  if (b < 1024) return `${b} B`;
+  if (b < 1024**2) return `${(b/1024).toFixed(1)} KB`;
+  if (b < 1024**3) return `${(b/1024**2).toFixed(1)} MB`;
+  return `${(b/1024**3).toFixed(2)} GB`;
+}
+
+function formatTtl(seconds) {
+  if (!seconds) return 'never';
+  if (seconds < 60)   return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds/60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds/3600)}h`;
+  return `${Math.round(seconds/86400)}d`;
+}
+
+function formatExpiry(expiresAt) {
+  if (!expiresAt) return null;
+  const diff = expiresAt - Date.now();
+  if (diff <= 0) return 'expired';
+  const s = Math.round(diff / 1000);
+  if (s < 60)   return `expires in ${s}s`;
+  if (s < 3600) return `expires in ${Math.round(s/60)}m`;
+  if (s < 86400) return `expires in ${Math.round(s/3600)}h`;
+  return `expires in ${Math.round(s/86400)}d`;
+}
+
+// ─── Event log ────────────────────────────────────────────────────────────────
+const eventLogEl = document.getElementById('event-log');
+let logCount = 0;
+
+function addLog(event, data) {
+  logCount++;
+  if (logCount === 1) eventLogEl.innerHTML = '';
+  const now  = new Date();
+  const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+  const dataStr = Object.entries(data)
+    .filter(([,v]) => !(v instanceof Error) || true)
+    .map(([k,v]) => {
+      if (v instanceof Error) return `${k}: ${v.message}`;
+      if (v instanceof Blob)  return `${k}: Blob(${v.size}b, ${v.type})`;
+      if (typeof v === 'object' && v !== null) return `${k}: ${JSON.stringify(v).slice(0,50)}`;
+      return `${k}: ${v}`;
+    }).join('  ');
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+  el.innerHTML = `<span class="log-time">${time}</span><span class="log-event ev-${event}">${event}</span><span class="log-data">${dataStr}</span>`;
+  eventLogEl.prepend(el);
+  if (logCount > 300) eventLogEl.lastChild?.remove();
+}
+
+['progress','complete','error','deferred','expired','registered','deleted','status'].forEach(ev => {
+  ODM.on(ev, data => {
+    addLog(ev, data);
+    if (['progress','complete','status','expired','error'].includes(ev)) refreshView();
+  });
+});
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.tab;
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${target}`));
+  });
+});
+
+// ─── Concurrency slider ───────────────────────────────────────────────────────
+const slider = document.getElementById('concurrency');
+slider.addEventListener('input', () => { document.getElementById('concurrency-val').textContent = slider.value; });
+
+// ─── Notices ──────────────────────────────────────────────────────────────────
+function showNotice(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `notice notice-${type}`;
+  el.textContent = msg;
+  document.getElementById('controls-body').prepend(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// ─── View refresh ─────────────────────────────────────────────────────────────
+async function refreshView() {
+  const { items, storage } = await ODM.view();
+
+  // Header storage bar
+  const pct = storage.quotaBytes === Infinity ? 0 : Math.round((storage.usageBytes / storage.quotaBytes) * 100);
+  document.getElementById('storage-label').textContent = `${storage.usageFormatted} / ${storage.quotaFormatted}`;
+  document.getElementById('storage-fill').style.width = `${pct}%`;
+
+  // File cards
+  const list = document.getElementById('file-list');
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state">No files registered.<br>Use the Controls panel to get started.</div>';
+  } else {
+    list.innerHTML = items.map(item => {
+      const status   = item.downloadStatus ?? 'pending';
+      const pctBar   = item.totalBytes
+        ? Math.round((item.bytesDownloaded / item.totalBytes) * 100)
+        : (status === 'complete' || status === 'expired' ? 100 : 0);
+      const byteInfo = item.storedBytes
+        ? `${formatBytes(item.storedBytes)} stored`
+        : item.totalBytes
+          ? `${formatBytes(item.bytesDownloaded)} / ${formatBytes(item.totalBytes)}`
+          : item.bytesDownloaded ? formatBytes(item.bytesDownloaded) : '—';
+      const expiryStr   = formatExpiry(item.expiresAt);
+      const isExpiredNow = status === 'expired';
+
+      return `<div class="file-card" data-id="${item.id}">
+        <div class="file-card-header">
+          <span class="file-id">${item.id}</span>
+          <span class="status-pill pill-${status}">${status}</span>
+        </div>
+        <div class="file-meta">
+          <span class="tag tag-mime">${item.mimeType ?? 'mime: inferred'}</span>
+          <span class="tag ${item.protected ? 'tag-protect' : 'tag-user'}">${item.protected ? 'protected' : 'user'}</span>
+          <span class="tag tag-v">v${item.version}</span>
+          <span class="tag tag-pri">p${item.priority}</span>
+          ${item.ttl ? `<span class="tag tag-ttl">ttl ${formatTtl(item.ttl)}</span>` : ''}
+        </div>
+        ${expiryStr ? `<div class="expiry-info ${isExpiredNow ? 'is-expired' : ''}">${expiryStr}</div>` : ''}
+        <div class="progress-wrap">
+          <div class="progress-info"><span>${byteInfo}</span><span>${pctBar}%</span></div>
+          <div class="progress-track"><div class="progress-fill status-${status}" style="width:${pctBar}%"></div></div>
+        </div>
+        ${item.errorMessage ? `<div class="notice notice-error" style="margin:4px 0 0;font-size:10px">${item.errorMessage}</div>` : ''}
+        <div class="file-card-actions">
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 8px" onclick="window._quickRetrieve('${item.id}')">⤓ retrieve</button>
+          <button class="btn btn-danger" style="font-size:10px;padding:3px 8px" onclick="window._quickDelete('${item.id}')">✕</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // view() JSON (omit blob from output — it's binary)
+  document.getElementById('view-output').textContent = JSON.stringify(
+    { items, storage },
+    (k, v) => (v instanceof Blob ? `Blob(${v.size}b, ${v.type})` : v),
+    2
+  );
+}
+
+// ─── IDB status ───────────────────────────────────────────────────────────────
+async function checkIDB() {
+  try {
+    // Trigger connection by calling view
+    await ODM.view();
+    document.getElementById('idb-dot').className = 'dot dot-ok';
+    document.getElementById('idb-text').textContent = 'idb: connected';
+  } catch (e) {
+    document.getElementById('idb-dot').className = 'dot dot-error';
+    document.getElementById('idb-text').textContent = 'idb: error';
+  }
+}
+
+// ─── Button handlers ──────────────────────────────────────────────────────────
+document.getElementById('btn-register-one').addEventListener('click', async () => {
+  try {
+    const tb = document.getElementById('reg-totalbytes').value;
+    await ODM.registerFile({
+      id:          document.getElementById('reg-id').value.trim(),
+      downloadUrl: document.getElementById('reg-url').value.trim(),
+      mimeType:    document.getElementById('reg-mime').value.trim() || null,
+      version:     parseInt(document.getElementById('reg-version').value, 10),
+      priority:    parseInt(document.getElementById('reg-priority').value, 10),
+      ttl:         parseInt(document.getElementById('reg-ttl').value, 10) || 0,
+      totalBytes:  tb ? parseInt(tb, 10) : null,
+      protected:   document.getElementById('reg-protected').checked,
+    });
+    await refreshView();
+    showNotice('File registered.', 'ok');
+  } catch (e) { showNotice(e.message, 'error'); }
+});
+
+document.getElementById('btn-register-batch').addEventListener('click', async () => {
+  try {
+    const entries = JSON.parse(document.getElementById('batch-json').value);
+    const { registered, removed } = await ODM.registerFiles(entries);
+    await refreshView();
+    showNotice(`Registered ${registered.length}. Removed ${removed.length}.`, 'ok');
+  } catch (e) { showNotice(e.message, 'error'); }
+});
+
+document.getElementById('btn-download').addEventListener('click', async () => {
+  try {
+    const concurrency = parseInt(document.getElementById('concurrency').value, 10);
+    const resumeOnly  = document.getElementById('resume-only').checked;
+    const retryFailed = document.getElementById('retry-failed').checked;
+    ODM.downloadFiles({ concurrency, resumeOnly, retryFailed }); // intentionally not awaited
+  } catch (e) { showNotice(e.message, 'error'); }
+});
+
+document.getElementById('btn-abort').addEventListener('click', async () => {
+  const id = document.getElementById('abort-id').value.trim();
+  id ? await ODM.abortDownload(id) : await ODM.abortAllDownloads();
+  await refreshView();
+});
+
+document.getElementById('btn-resume-sw').addEventListener('click', () => {
+  ODM.resumeInterruptedDownloads();
+});
+
+document.getElementById('btn-retrieve').addEventListener('click', async () => {
+  const id     = document.getElementById('ret-id').value.trim();
+  const resultEl = document.getElementById('retrieve-result');
+  resultEl.classList.remove('is-error');
+  try {
+    const blob = await ODM.retrieve(id);
+    let preview = `Blob\n  size: ${blob.size} bytes (${formatBytes(blob.size)})\n  type: "${blob.type}"\n`;
+
+    // Show a text preview for JSON/text types
+    if (blob.type.includes('json') || blob.type.includes('text')) {
+      const text = await blob.text();
+      const parsed = blob.type.includes('json') ? JSON.stringify(JSON.parse(text), null, 2) : text;
+      preview += `\nContent preview:\n${parsed.slice(0, 800)}${parsed.length > 800 ? '\n…' : ''}`;
+    }
+
+    resultEl.textContent = preview;
+    resultEl.classList.add('visible');
+  } catch (e) {
+    resultEl.textContent = `Error: ${e.message}`;
+    resultEl.classList.add('visible', 'is-error');
+  }
+});
+
+document.getElementById('btn-delete').addEventListener('click', async () => {
+  const id             = document.getElementById('del-id').value.trim();
+  const removeRegistry = document.getElementById('del-remove-registry').checked;
+  try {
+    id ? await ODM.delete(id, { removeRegistry }) : await ODM.deleteAll({ removeRegistry });
+    await refreshView();
+  } catch (e) { showNotice(e.message, 'error'); }
+});
+
+document.getElementById('btn-isready').addEventListener('click', async () => {
+  const id     = document.getElementById('status-id').value.trim();
+  const resultEl = document.getElementById('status-result');
+  resultEl.classList.remove('is-error');
+  try {
+    const ready = await ODM.isReady(id);
+    resultEl.textContent = `isReady("${id}") → ${ready}`;
+    resultEl.classList.add('visible');
+  } catch (e) {
+    resultEl.textContent = `Error: ${e.message}`;
+    resultEl.classList.add('visible', 'is-error');
+  }
+});
+
+document.getElementById('btn-getstatus').addEventListener('click', async () => {
+  const id     = document.getElementById('status-id').value.trim();
+  const resultEl = document.getElementById('status-result');
+  resultEl.classList.remove('is-error');
+  try {
+    const status = await ODM.getStatus(id);
+    resultEl.textContent = JSON.stringify(
+      status,
+      (k, v) => (v instanceof Blob ? `Blob(${v.size}b, ${v.type})` : v),
+      2
+    );
+    resultEl.classList.add('visible');
+  } catch (e) {
+    resultEl.textContent = `Error: ${e.message}`;
+    resultEl.classList.add('visible', 'is-error');
+  }
+});
+
+document.getElementById('btn-view').addEventListener('click', refreshView);
+
+document.getElementById('btn-clear-log').addEventListener('click', () => {
+  logCount = 0;
+  eventLogEl.innerHTML = '<div class="log-empty">Awaiting events…</div>';
+});
+
+document.getElementById('btn-persist').addEventListener('click', async () => {
+  const granted = await ODM.requestPersistentStorage();
+  document.getElementById('persist-status').textContent =
+    granted ? '✓ Persistent storage granted' : '✗ Not granted (browser may have prompted)';
+});
+
+document.getElementById('btn-start-monitor').addEventListener('click', () => {
+  ODM.startMonitoring();
+  showNotice('Connectivity monitoring started.', 'ok');
+  updateConnDot();
+});
+
+document.getElementById('btn-stop-monitor').addEventListener('click', () => {
+  ODM.stopMonitoring();
+  showNotice('Connectivity monitoring stopped.', 'info');
+  updateConnDot();
+});
+
+// ─── Connectivity status dot ──────────────────────────────────────────────────
+function updateConnDot() {
+  const online      = ODM.isOnline();
+  const monitoring  = ODM.isMonitoring();
+  const dot  = document.getElementById('conn-dot');
+  const text = document.getElementById('conn-text');
+  if (!online) {
+    dot.className  = 'dot dot-error';
+    text.textContent = 'offline';
+  } else if (monitoring) {
+    dot.className  = 'dot dot-ok';
+    text.textContent = 'online ▸ monitored';
+  } else {
+    dot.className  = 'dot dot-idle';
+    text.textContent = 'online';
+  }
+}
+
+ODM.on('connectivity', ({ online }) => {
+  updateConnDot();
+  addLog('connectivity', { online });
+  refreshView();
+});
+window._quickRetrieve = (id) => {
+  document.getElementById('ret-id').value = id;
+  document.querySelectorAll('.tab')[2].click();
+};
+
+window._quickDelete = async (id) => {
+  try { await ODM.delete(id); await refreshView(); } catch (e) { showNotice(e.message, 'error'); }
+};
+
+// ─── Initialise ───────────────────────────────────────────────────────────────
+await checkIDB();
+await refreshView();
+updateConnDot();
+
+// Poll while downloads are active
+setInterval(async () => {
+  const { items } = await ODM.view();
+  if (items.some(i => i.downloadStatus === 'in-progress')) await refreshView();
+}, 500);
+</script>
+</body>
+</html>
