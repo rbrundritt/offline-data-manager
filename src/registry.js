@@ -6,11 +6,11 @@
  * {
  *   id:           string        — unique identifier
  *   downloadUrl:  string        — URL to fetch
- *   mimeType:     string|null   — MIME type for the stored Blob; null means infer from
+ *   mimeType:     string|null   — MIME type for the stored ArrayBuffer; null means infer from
  *                                 Content-Type response header at download time
  *   version:      number        — incrementing integer; re-download when strictly increased
  *   protected:    boolean  — if true, registry entry survives deletion and data is
- *                            re-downloaded on next downloadFiles() call
+ *                            re-downloaded on the next drain cycle
  *   priority:     number   — lower = higher priority (default: 10)
  *   ttl:          number   — time-to-live in seconds; 0 or omitted means never expires
  *   totalBytes:   number|null — optional size hint for storage checks and progress display
@@ -23,7 +23,7 @@
  * {
  *   id:              string         — matches registry id
  *   status:          string         — see DOWNLOAD_STATUS below
- *   blob:            Blob|null      — stored file data; null until download completes
+ *   data:            ArrayBuffer|null — stored file data; null until download completes
  *   bytesDownloaded: number
  *   totalBytes:      number|null
  *   byteOffset:      number         — for Range request resume
@@ -38,9 +38,9 @@
  * Status values:
  *   pending     — waiting to be downloaded
  *   in-progress — actively downloading
- *   paused      — aborted mid-download; resumes on next downloadFiles()
- *   complete    — fully downloaded; blob is available
- *   expired     — download was complete but TTL has elapsed; blob still available
+ *   paused      — aborted mid-download; loop resumes on next drain cycle
+ *   complete    — fully downloaded; array buffer data is available
+ *   expired     — download was complete but TTL has elapsed; array buffer data still available
  *                 and is replaced (not removed) when the new download completes
  *   failed      — download exhausted all retries
  *   deferred    — skipped due to insufficient storage; re-evaluated next run
@@ -49,6 +49,7 @@
 import { dbGet, dbGetAll, dbPut, dbDelete, STORES } from './db.js';
 import { emit } from './events.js';
 import { getStorageEstimate, formatBytes } from './storage.js';
+import { _notifyNewWork } from './downloader.js';
 
 export const DOWNLOAD_STATUS = {
   PENDING:     'pending',
@@ -60,7 +61,7 @@ export const DOWNLOAD_STATUS = {
   DEFERRED:    'deferred',
 };
 
-// Statuses where the blob is present and accessible
+// Statuses where the array buffer data is present and accessible
 export const READY_STATUSES = new Set([
   DOWNLOAD_STATUS.COMPLETE,
   DOWNLOAD_STATUS.EXPIRED,
@@ -95,7 +96,7 @@ function makeQueueEntry(id) {
   return {
     id,
     status:          DOWNLOAD_STATUS.PENDING,
-    blob:            null,
+    data:            null,
     bytesDownloaded: 0,
     totalBytes:      null,
     byteOffset:      0,
@@ -138,7 +139,7 @@ export function isExpired(expiresAt) {
  *
  * - New entry: added to registry, fresh pending queue entry created.
  * - Existing, version increased: registry updated, queue reset to pending.
- *   Existing blob remains accessible until the new download completes.
+ *   Existing array buffer remains accessible until the new download completes.
  * - Existing, version unchanged or lower: no-op.
  *
  * @param {object} entry
@@ -169,7 +170,7 @@ export async function registerFile(entry) {
     if (entry.version > existing.version) {
       await dbPut(STORES.REGISTRY, registryRecord);
 
-      // Preserve the existing blob while re-queuing so data stays accessible
+      // Preserve the existing data array buffer while re-queuing so data stays accessible
       const newQueueEntry = existingQueue
         ? {
             ...existingQueue,
@@ -181,12 +182,13 @@ export async function registerFile(entry) {
             deferredReason:  null,
             completedAt:     null,
             expiresAt:       null,
-            // blob intentionally kept so retrieve() still works during re-download
+            // data array buffer intentionally kept so retrieve() still works during re-download
           }
         : makeQueueEntry(entry.id);
 
       await dbPut(STORES.DOWNLOAD_QUEUE, newQueueEntry);
       emit('registered', { id: entry.id, reason: 'version-updated' });
+      _notifyNewWork();
     }
     // Version unchanged or lower — no-op
     return;
@@ -196,6 +198,7 @@ export async function registerFile(entry) {
   await dbPut(STORES.REGISTRY, registryRecord);
   await dbPut(STORES.DOWNLOAD_QUEUE, makeQueueEntry(entry.id));
   emit('registered', { id: entry.id, reason: 'new' });
+  _notifyNewWork();
 }
 
 /**
@@ -237,7 +240,7 @@ export async function registerFiles(entries) {
  * Checks all complete queue entries against their TTL and flips any that have
  * expired to `expired` status, queuing them for re-download.
  *
- * Called internally by downloadFiles() before deciding what to download.
+ * Called internally by the download loop before each drain cycle.
  * @returns {Promise<string[]>} IDs of entries that were marked expired
  */
 export async function evaluateExpiry() {
@@ -264,7 +267,7 @@ export async function evaluateExpiry() {
  *
  * @returns {Promise<{ items: object[], storage: object }>}
  */
-export async function view() {
+export async function getAllStatus() {
   const [registryEntries, queueEntries, storageEstimate] = await Promise.all([
     dbGetAll(STORES.REGISTRY),
     dbGetAll(STORES.DOWNLOAD_QUEUE),
@@ -280,7 +283,7 @@ export async function view() {
         // Registry fields
         id:          reg.id,
         downloadUrl: reg.downloadUrl,
-        mimeType:    reg.mimeType ?? queue?.blob?.type ?? null, // null means infer at download time
+        mimeType:    reg.mimeType, // null means infer at download time
         version:     reg.version,
         protected:   reg.protected,
         priority:    reg.priority,
@@ -292,7 +295,7 @@ export async function view() {
         // Queue fields
         downloadStatus:  queue?.status          ?? null,
         bytesDownloaded: queue?.bytesDownloaded ?? 0,
-        storedBytes:     queue?.blob?.size      ?? null,
+        storedBytes:     queue?.data?.length    ?? null,
         progress:        (queue?.totalBytes && queue?.bytesDownloaded)
           ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
           : null,
@@ -337,7 +340,7 @@ export async function getStatus(id) {
   return {
     id:          reg.id,
     downloadUrl: reg.downloadUrl,
-    mimeType:    reg.mimeType ?? queue?.blob?.type ?? null,
+    mimeType:    reg.mimeType ?? null,
     version:     reg.version,
     protected:   reg.protected,
     priority:    reg.priority,
@@ -348,7 +351,7 @@ export async function getStatus(id) {
     updatedAt:    reg.updatedAt,
     downloadStatus:  queue?.status          ?? null,
     bytesDownloaded: queue?.bytesDownloaded ?? 0,
-    storedBytes:     queue?.blob?.size      ?? null,
+    storedBytes:     queue?.data?.length      ?? null,
     progress:        (queue?.totalBytes && queue?.bytesDownloaded)
       ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
       : null,
@@ -363,7 +366,7 @@ export async function getStatus(id) {
 
 /**
  * Returns true if a file has data available (complete or expired).
- * An expired file still has a valid blob — it is simply due for refresh.
+ * An expired file still has a valid array buffer — it is simply due for refresh.
  *
  * @param {string} id
  * @returns {Promise<boolean>}

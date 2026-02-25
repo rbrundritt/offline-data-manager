@@ -1,18 +1,21 @@
 export default OfflineDataManager;
 declare namespace OfflineDataManager {
     export { setDBInfo };
+    export { dbGetAllIds };
     export { registerFile };
     export { registerFiles };
-    export { downloadFiles };
+    export { startDownloads };
+    export { stopDownloads };
+    export { retryFailed };
+    export { isDownloading };
     export { abortDownload };
     export { abortAllDownloads };
-    export { resumeInterruptedDownloads };
     export { startMonitoring };
     export { stopMonitoring };
     export { isOnline };
     export { isMonitoring };
     export { retrieve };
-    export { view };
+    export { getAllStatus };
     export { getStatus };
     export { isReady };
     export { deleteFile as delete };
@@ -26,27 +29,32 @@ declare namespace OfflineDataManager {
 }
 import { registerFile } from './registry.js';
 import { registerFiles } from './registry.js';
-import { downloadFiles } from './downloader.js';
+import { startDownloads } from './downloader.js';
+import { stopDownloads } from './downloader.js';
+import { retryFailed } from './downloader.js';
+import { isDownloading } from './downloader.js';
 import { abortDownload } from './downloader.js';
 import { abortAllDownloads } from './downloader.js';
-import { resumeInterruptedDownloads } from './downloader.js';
 import { startMonitoring } from './downloader.js';
 import { stopMonitoring } from './downloader.js';
 import { isOnline } from './downloader.js';
 import { isMonitoring } from './downloader.js';
 /**
- * Retrieves the stored Blob for a registered file.
- * Returns the Blob as-is — the caller is responsible for interpreting its contents.
+ * Retrieves the stored file data for a registered file.
+ * Returns the array buffer and content type.
  *
- * Returns the blob even if the file is expired; expiry only means a refresh is
+ * Returns the data even if the file is expired; expiry only means a refresh is
  * queued, not that the data is gone.
  *
  * @param {string} id
- * @returns {Promise<Blob>}
- * @throws {Error} if the file is not registered or has no blob yet
+ * @returns {Promise<{ data: ArrayBuffer, mimeType: string }>}
+ * @throws {Error} if the file is not registered or has no data yet
  */
-export function retrieve(id: string): Promise<Blob>;
-import { view } from './registry.js';
+export function retrieve(id: string): Promise<{
+    data: ArrayBuffer;
+    mimeType: string;
+}>;
+import { getAllStatus } from './registry.js';
 import { getStatus } from './registry.js';
 import { isReady } from './registry.js';
 import { deleteFile } from './deleter.js';
@@ -59,4 +67,5 @@ import { getStorageEstimate } from './storage.js';
 import { requestPersistentStorage } from './storage.js';
 import { isPersistentStorage } from './storage.js';
 import { setDBInfo } from './db.js';
-export { registerFile, registerFiles, downloadFiles, abortDownload, abortAllDownloads, resumeInterruptedDownloads, startMonitoring, stopMonitoring, isOnline, isMonitoring, view, getStatus, isReady, deleteFile, deleteAllFiles, on, off, once, emit, getStorageEstimate, requestPersistentStorage, isPersistentStorage };
+import { dbGetAllIds } from './db.js';
+export { registerFile, registerFiles, startDownloads, stopDownloads, retryFailed, isDownloading, abortDownload, abortAllDownloads, startMonitoring, stopMonitoring, isOnline, isMonitoring, getAllStatus, getStatus, isReady, deleteFile, deleteAllFiles, on, off, once, emit, getStorageEstimate, requestPersistentStorage, isPersistentStorage };

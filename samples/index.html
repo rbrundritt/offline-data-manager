@@ -60,8 +60,7 @@
 
   .badge { font-size: 10px; padding: 2px 7px; border: 1px solid var(--border2); border-radius: 2px; color: var(--text-dim); }
 
-  #idb-status { font-size: 10px; display: flex; align-items: center; gap: 5px; }
-  #connectivity-status { font-size: 10px; display: flex; align-items: center; gap: 5px; }
+  #idb-status, #connectivity-status, #loop-status { font-size: 10px; display: flex; align-items: center; gap: 5px; }
   .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
   .dot-ok { background: var(--accent); } .dot-warn { background: var(--warn); } .dot-error { background: var(--error); } .dot-idle { background: var(--text-muted); }
 
@@ -193,18 +192,20 @@
   .notice-info  { background: rgba(76,158,242,0.06);  border-color: var(--info);   color: var(--info); }
 
   /* ── Event log ── */
-  .log-entry { display: grid; grid-template-columns: 65px 80px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; animation: logIn 0.15s ease; }
+  .log-entry { display: grid; grid-template-columns: 65px 90px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; animation: logIn 0.15s ease; }
   @keyframes logIn { from { opacity: 0; background: rgba(74,242,161,0.04); } to { opacity: 1; } }
   .log-time  { color: var(--text-muted); font-size: 10px; padding-top: 1px; }
   .log-event { font-weight: 500; }
-  .log-event.ev-progress   { color: var(--info); }
-  .log-event.ev-complete   { color: var(--accent); }
-  .log-event.ev-error      { color: var(--error); }
-  .log-event.ev-deferred   { color: var(--warn); }
-  .log-event.ev-expired    { color: var(--warn); }
-  .log-event.ev-registered { color: var(--text-dim); }
-  .log-event.ev-deleted    { color: var(--error); }
-  .log-event.ev-status     { color: var(--text-dim); }
+  .log-event.ev-progress      { color: var(--info); }
+  .log-event.ev-complete      { color: var(--accent); }
+  .log-event.ev-error         { color: var(--error); }
+  .log-event.ev-deferred      { color: var(--warn); }
+  .log-event.ev-expired       { color: var(--warn); }
+  .log-event.ev-registered    { color: var(--text-dim); }
+  .log-event.ev-deleted       { color: var(--error); }
+  .log-event.ev-status        { color: var(--text-dim); }
+  .log-event.ev-stopped       { color: var(--warn); }
+  .log-event.ev-connectivity  { color: var(--info); }
   .log-data { color: var(--text-dim); word-break: break-all; }
   .log-empty { color: var(--text-muted); font-size: 11px; padding: 20px 0; text-align: center; }
 
@@ -222,7 +223,7 @@
   <header>
     <div class="header-left">
       <div class="logo">offline-data-manager <span>/ test harness</span></div>
-      <div class="badge">v3.1</div>
+      <div class="badge">v3.2</div>
       <div id="idb-status">
         <span class="dot dot-idle" id="idb-dot"></span>
         <span id="idb-text">indexeddb</span>
@@ -230,6 +231,10 @@
       <div id="connectivity-status">
         <span class="dot dot-idle" id="conn-dot"></span>
         <span id="conn-text">network</span>
+      </div>
+      <div id="loop-status">
+        <span class="dot dot-idle" id="loop-dot"></span>
+        <span id="loop-text">loop</span>
       </div>
     </div>
     <div class="storage-wrap">
@@ -301,51 +306,42 @@
         <!-- Download tab -->
         <div class="tab-content" id="tab-download">
           <div class="section">
-            <div class="section-title">Download Options</div>
+            <div class="section-title">Download Loop</div>
+            <div class="dimtext mb-10">The loop runs persistently, draining the queue and waiting for new work. Registering a file while the loop is running triggers its download automatically.</div>
             <div class="slider-row">
               <label style="margin:0;width:90px">Concurrency</label>
               <input type="range" id="concurrency" min="1" max="6" value="2">
               <span class="slider-val" id="concurrency-val">2</span>
             </div>
-            <div class="toggle-row">
-              <span class="toggle-label">Resume Only</span>
-              <label class="toggle"><input type="checkbox" id="resume-only"><span class="toggle-track"></span></label>
+            <div class="btn-group mb-12">
+              <button class="btn btn-primary" id="btn-start-downloads">&#9654; Start Loop</button>
+              <button class="btn btn-warn" id="btn-stop-downloads">&#9632; Stop Loop</button>
             </div>
-            <div class="toggle-row mb-12">
-              <span class="toggle-label">Retry Failed</span>
-              <label class="toggle"><input type="checkbox" id="retry-failed"><span class="toggle-track"></span></label>
-            </div>
-            <button class="btn btn-primary btn-full" id="btn-download">▶ Start Downloads</button>
+            <button class="btn btn-ghost btn-full" id="btn-retry-failed">&#8635; Retry Failed</button>
           </div>
 
           <div class="section">
             <div class="section-title">Connectivity Monitor</div>
-            <div class="dimtext mb-10">Pauses downloads when offline, resumes automatically when online.</div>
+            <div class="dimtext mb-10">Pauses downloads when offline. Wakes the loop automatically when online.</div>
             <div class="btn-group">
-              <button class="btn btn-ghost" id="btn-start-monitor">▶ Start</button>
-              <button class="btn btn-ghost" id="btn-stop-monitor">■ Stop</button>
+              <button class="btn btn-ghost" id="btn-start-monitor">&#9654; Start</button>
+              <button class="btn btn-ghost" id="btn-stop-monitor">&#9632; Stop</button>
             </div>
           </div>
 
           <div class="section">
             <div class="section-title">Abort</div>
             <div class="field"><label>ID (blank = abort all)</label><input type="text" id="abort-id" placeholder="leave blank for all"></div>
-            <button class="btn btn-warn btn-full" id="btn-abort">■ Abort</button>
-          </div>
-
-          <div class="section">
-            <div class="section-title">Resume Interrupted</div>
-            <div class="dimtext mb-10">Simulates SW activation — resumes paused / in-progress downloads.</div>
-            <button class="btn btn-ghost btn-full" id="btn-resume-sw">↺ Resume Interrupted</button>
+            <button class="btn btn-warn btn-full" id="btn-abort">&#9632; Abort</button>
           </div>
         </div>
 
         <!-- Retrieve tab -->
         <div class="tab-content" id="tab-retrieve">
           <div class="section">
-            <div class="section-title">Retrieve Blob</div>
+            <div class="section-title">Retrieve ArrayBuffer</div>
             <div class="field"><label>ID</label><input type="text" id="ret-id" placeholder="registered file id"></div>
-            <button class="btn btn-primary btn-full mt-8" id="btn-retrieve">⤓ Retrieve</button>
+            <button class="btn btn-primary btn-full mt-8" id="btn-retrieve">&#10571; Retrieve</button>
             <pre class="result-box" id="retrieve-result"></pre>
           </div>
         </div>
@@ -359,7 +355,7 @@
               <span class="toggle-label">Remove Registry</span>
               <label class="toggle"><input type="checkbox" id="del-remove-registry"><span class="toggle-track"></span></label>
             </div>
-            <button class="btn btn-danger btn-full" id="btn-delete">✕ Delete</button>
+            <button class="btn btn-danger btn-full" id="btn-delete">&#10005; Delete</button>
           </div>
 
           <div class="section">
@@ -386,14 +382,14 @@
     <div class="panel">
       <div class="panel-header">
         <span class="panel-title">Registry</span>
-        <button class="btn btn-ghost" id="btn-view" style="padding:3px 10px;font-size:10px">↻ Refresh</button>
+        <button class="btn btn-ghost" id="btn-view" style="padding:3px 10px;font-size:10px">&#8635; Refresh</button>
       </div>
       <div class="panel-body">
         <div id="file-list">
           <div class="empty-state">No files registered.<br>Use the Controls panel to get started.</div>
         </div>
         <div class="section mt-12">
-          <div class="section-title">view() Output</div>
+          <div class="section-title">getAllStatus() Output</div>
           <pre id="view-output">—</pre>
         </div>
       </div>
@@ -406,7 +402,7 @@
         <button class="btn btn-ghost" id="btn-clear-log" style="padding:3px 10px;font-size:10px">Clear</button>
       </div>
       <div class="panel-body">
-        <div id="event-log"><div class="log-empty">Awaiting events…</div></div>
+        <div id="event-log"><div class="log-empty">Awaiting events&#8230;</div></div>
       </div>
     </div>
 
@@ -430,8 +426,8 @@ function formatBytes(b) {
 
 function formatTtl(seconds) {
   if (!seconds) return 'never';
-  if (seconds < 60)   return `${seconds}s`;
-  if (seconds < 3600) return `${Math.round(seconds/60)}m`;
+  if (seconds < 60)    return `${seconds}s`;
+  if (seconds < 3600)  return `${Math.round(seconds/60)}m`;
   if (seconds < 86400) return `${Math.round(seconds/3600)}h`;
   return `${Math.round(seconds/86400)}d`;
 }
@@ -441,8 +437,8 @@ function formatExpiry(expiresAt) {
   const diff = expiresAt - Date.now();
   if (diff <= 0) return 'expired';
   const s = Math.round(diff / 1000);
-  if (s < 60)   return `expires in ${s}s`;
-  if (s < 3600) return `expires in ${Math.round(s/60)}m`;
+  if (s < 60)    return `expires in ${s}s`;
+  if (s < 3600)  return `expires in ${Math.round(s/60)}m`;
   if (s < 86400) return `expires in ${Math.round(s/3600)}h`;
   return `expires in ${Math.round(s/86400)}d`;
 }
@@ -457,11 +453,10 @@ function addLog(event, data) {
   const now  = new Date();
   const time = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
   const dataStr = Object.entries(data)
-    .filter(([,v]) => !(v instanceof Error) || true)
-    .map(([k,v]) => {
-      if (v instanceof Error) return `${k}: ${v.message}`;
-      if (v instanceof Blob)  return `${k}: Blob(${v.size}b, ${v.type})`;
-      if (typeof v === 'object' && v !== null) return `${k}: ${JSON.stringify(v).slice(0,50)}`;
+    .map(([k, v]) => {
+      if (v instanceof Error)       return `${k}: ${v.message}`;
+      if (v instanceof ArrayBuffer) return `${k}: ArrayBuffer(${v.byteLength})`;
+      if (typeof v === 'object' && v !== null) return `${k}: ${JSON.stringify(v).slice(0, 50)}`;
       return `${k}: ${v}`;
     }).join('  ');
   const el = document.createElement('div');
@@ -471,12 +466,14 @@ function addLog(event, data) {
   if (logCount > 300) eventLogEl.lastChild?.remove();
 }
 
-['progress','complete','error','deferred','expired','registered','deleted','status'].forEach(ev => {
+['progress','complete','error','deferred','expired','registered','deleted','status','stopped','connectivity'].forEach(ev => {
   ODM.on(ev, data => {
     addLog(ev, data);
     if (['progress','complete','status','expired','error'].includes(ev)) refreshView();
+    if (['complete','stopped'].includes(ev)) updateLoopDot();
   });
 });
+
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -501,7 +498,7 @@ function showNotice(msg, type = 'info') {
 
 // ─── View refresh ─────────────────────────────────────────────────────────────
 async function refreshView() {
-  const { items, storage } = await ODM.view();
+  const { items, storage } = await ODM.getAllStatus();
 
   // Header storage bar
   const pct = storage.quotaBytes === Infinity ? 0 : Math.round((storage.usageBytes / storage.quotaBytes) * 100);
@@ -514,16 +511,16 @@ async function refreshView() {
     list.innerHTML = '<div class="empty-state">No files registered.<br>Use the Controls panel to get started.</div>';
   } else {
     list.innerHTML = items.map(item => {
-      const status   = item.downloadStatus ?? 'pending';
-      const pctBar   = item.totalBytes
+      const status    = item.downloadStatus ?? 'pending';
+      const pctBar    = item.totalBytes
         ? Math.round((item.bytesDownloaded / item.totalBytes) * 100)
         : (status === 'complete' || status === 'expired' ? 100 : 0);
-      const byteInfo = item.storedBytes
+      const byteInfo  = item.storedBytes
         ? `${formatBytes(item.storedBytes)} stored`
         : item.totalBytes
           ? `${formatBytes(item.bytesDownloaded)} / ${formatBytes(item.totalBytes)}`
           : item.bytesDownloaded ? formatBytes(item.bytesDownloaded) : '—';
-      const expiryStr   = formatExpiry(item.expiresAt);
+      const expiryStr    = formatExpiry(item.expiresAt);
       const isExpiredNow = status === 'expired';
 
       return `<div class="file-card" data-id="${item.id}">
@@ -545,17 +542,17 @@ async function refreshView() {
         </div>
         ${item.errorMessage ? `<div class="notice notice-error" style="margin:4px 0 0;font-size:10px">${item.errorMessage}</div>` : ''}
         <div class="file-card-actions">
-          <button class="btn btn-ghost" style="font-size:10px;padding:3px 8px" onclick="window._quickRetrieve('${item.id}')">⤓ retrieve</button>
-          <button class="btn btn-danger" style="font-size:10px;padding:3px 8px" onclick="window._quickDelete('${item.id}')">✕</button>
+          <button class="btn btn-ghost" style="font-size:10px;padding:3px 8px" onclick="window._quickRetrieve('${item.id}')">&#10571; retrieve</button>
+          <button class="btn btn-danger" style="font-size:10px;padding:3px 8px" onclick="window._quickDelete('${item.id}')">&#10005;</button>
         </div>
       </div>`;
     }).join('');
   }
 
-  // view() JSON (omit blob from output — it's binary)
+  // getAllStatus() JSON — replace ArrayBuffer values with a readable summary
   document.getElementById('view-output').textContent = JSON.stringify(
     { items, storage },
-    (k, v) => (v instanceof Blob ? `Blob(${v.size}b, ${v.type})` : v),
+    (k, v) => (v instanceof ArrayBuffer ? `ArrayBuffer(${v.byteLength})` : v),
     2
   );
 }
@@ -563,8 +560,7 @@ async function refreshView() {
 // ─── IDB status ───────────────────────────────────────────────────────────────
 async function checkIDB() {
   try {
-    // Trigger connection by calling view
-    await ODM.view();
+    await ODM.getAllStatus();
     document.getElementById('idb-dot').className = 'dot dot-ok';
     document.getElementById('idb-text').textContent = 'idb: connected';
   } catch (e) {
@@ -601,13 +597,22 @@ document.getElementById('btn-register-batch').addEventListener('click', async ()
   } catch (e) { showNotice(e.message, 'error'); }
 });
 
-document.getElementById('btn-download').addEventListener('click', async () => {
-  try {
-    const concurrency = parseInt(document.getElementById('concurrency').value, 10);
-    const resumeOnly  = document.getElementById('resume-only').checked;
-    const retryFailed = document.getElementById('retry-failed').checked;
-    ODM.downloadFiles({ concurrency, resumeOnly, retryFailed }); // intentionally not awaited
-  } catch (e) { showNotice(e.message, 'error'); }
+document.getElementById('btn-start-downloads').addEventListener('click', () => {
+  const concurrency = parseInt(document.getElementById('concurrency').value, 10);
+  ODM.startDownloads({ concurrency });
+  updateLoopDot();
+  showNotice('Download loop started.', 'ok');
+});
+
+document.getElementById('btn-stop-downloads').addEventListener('click', async () => {
+  await ODM.stopDownloads();
+  updateLoopDot();
+  showNotice('Download loop stopped.', 'info');
+});
+
+document.getElementById('btn-retry-failed').addEventListener('click', async () => {
+  await ODM.retryFailed();
+  showNotice('Failed entries re-queued.', 'ok');
 });
 
 document.getElementById('btn-abort').addEventListener('click', async () => {
@@ -616,22 +621,18 @@ document.getElementById('btn-abort').addEventListener('click', async () => {
   await refreshView();
 });
 
-document.getElementById('btn-resume-sw').addEventListener('click', () => {
-  ODM.resumeInterruptedDownloads();
-});
-
 document.getElementById('btn-retrieve').addEventListener('click', async () => {
-  const id     = document.getElementById('ret-id').value.trim();
+  const id       = document.getElementById('ret-id').value.trim();
   const resultEl = document.getElementById('retrieve-result');
   resultEl.classList.remove('is-error');
   try {
-    const blob = await ODM.retrieve(id);
-    let preview = `Blob\n  size: ${blob.size} bytes (${formatBytes(blob.size)})\n  type: "${blob.type}"\n`;
+    const { data, mimeType } = await ODM.retrieve(id);
+    let preview = `ArrayBuffer\n  size: ${data.byteLength} bytes (${formatBytes(data.byteLength)})\n  type: "${mimeType}"\n`;
 
-    // Show a text preview for JSON/text types
-    if (blob.type.includes('json') || blob.type.includes('text')) {
-      const text = await blob.text();
-      const parsed = blob.type.includes('json') ? JSON.stringify(JSON.parse(text), null, 2) : text;
+    // Show a text preview for JSON / text types
+    if (mimeType && (mimeType.includes('json') || mimeType.includes('text'))) {
+      const text   = new TextDecoder('utf-8').decode(data);
+      const parsed = mimeType.includes('json') ? JSON.stringify(JSON.parse(text), null, 2) : text;
       preview += `\nContent preview:\n${parsed.slice(0, 800)}${parsed.length > 800 ? '\n…' : ''}`;
     }
 
@@ -645,15 +646,15 @@ document.getElementById('btn-retrieve').addEventListener('click', async () => {
 
 document.getElementById('btn-delete').addEventListener('click', async () => {
   const id             = document.getElementById('del-id').value.trim();
-  const removeRegistry = document.getElementById('del-remove-registry').checked;
+  const removeProtected = document.getElementById('del-remove-registry').checked;
   try {
-    id ? await ODM.delete(id, { removeRegistry }) : await ODM.deleteAll({ removeRegistry });
+    id ? await ODM.delete(id, { removeProtected }) : await ODM.deleteAll({ removeProtected });
     await refreshView();
   } catch (e) { showNotice(e.message, 'error'); }
 });
 
 document.getElementById('btn-isready').addEventListener('click', async () => {
-  const id     = document.getElementById('status-id').value.trim();
+  const id       = document.getElementById('status-id').value.trim();
   const resultEl = document.getElementById('status-result');
   resultEl.classList.remove('is-error');
   try {
@@ -667,14 +668,14 @@ document.getElementById('btn-isready').addEventListener('click', async () => {
 });
 
 document.getElementById('btn-getstatus').addEventListener('click', async () => {
-  const id     = document.getElementById('status-id').value.trim();
+  const id       = document.getElementById('status-id').value.trim();
   const resultEl = document.getElementById('status-result');
   resultEl.classList.remove('is-error');
   try {
     const status = await ODM.getStatus(id);
     resultEl.textContent = JSON.stringify(
       status,
-      (k, v) => (v instanceof Blob ? `Blob(${v.size}b, ${v.type})` : v),
+      (k, v) => (v instanceof ArrayBuffer ? `ArrayBuffer(${v.byteLength})` : v),
       2
     );
     resultEl.classList.add('visible');
@@ -709,29 +710,44 @@ document.getElementById('btn-stop-monitor').addEventListener('click', () => {
   updateConnDot();
 });
 
+// ─── Loop status dot ──────────────────────────────────────────────────────────
+function updateLoopDot() {
+  const running = ODM.isDownloading();
+  const dot  = document.getElementById('loop-dot');
+  const text = document.getElementById('loop-text');
+  if (running) {
+    dot.className    = 'dot dot-ok';
+    text.textContent = 'loop: running';
+  } else {
+    dot.className    = 'dot dot-idle';
+    text.textContent = 'loop: stopped';
+  }
+}
+
 // ─── Connectivity status dot ──────────────────────────────────────────────────
 function updateConnDot() {
-  const online      = ODM.isOnline();
-  const monitoring  = ODM.isMonitoring();
+  const online     = ODM.isOnline();
+  const monitoring = ODM.isMonitoring();
   const dot  = document.getElementById('conn-dot');
   const text = document.getElementById('conn-text');
   if (!online) {
-    dot.className  = 'dot dot-error';
+    dot.className    = 'dot dot-error';
     text.textContent = 'offline';
   } else if (monitoring) {
-    dot.className  = 'dot dot-ok';
+    dot.className    = 'dot dot-ok';
     text.textContent = 'online ▸ monitored';
   } else {
-    dot.className  = 'dot dot-idle';
+    dot.className    = 'dot dot-idle';
     text.textContent = 'online';
   }
 }
 
 ODM.on('connectivity', ({ online }) => {
   updateConnDot();
-  addLog('connectivity', { online });
+  updateLoopDot();
   refreshView();
 });
+
 window._quickRetrieve = (id) => {
   document.getElementById('ret-id').value = id;
   document.querySelectorAll('.tab')[2].click();
@@ -745,10 +761,11 @@ window._quickDelete = async (id) => {
 await checkIDB();
 await refreshView();
 updateConnDot();
+updateLoopDot();
 
 // Poll while downloads are active
 setInterval(async () => {
-  const { items } = await ODM.view();
+  const { items } = await ODM.getAllStatus();
   if (items.some(i => i.downloadStatus === 'in-progress')) await refreshView();
 }, 500);
 </script>

@@ -4,9 +4,9 @@
  *
  * Stores:
  *   registry      — one record per registered file
- *   downloadQueue — one record per file tracking download state and stored blob
+ *   downloadQueue — one record per file tracking download state and stored array buffer
  *
- * All file data is stored as a Blob directly on the downloadQueue record.
+ * All file data is stored as an ArrayBuffer directly on the downloadQueue record.
  * There is no separate data store — the download manager is purely a
  * fetch-and-store layer with no knowledge of file contents.
  */
@@ -16,6 +16,9 @@ let DB_VERSION = 1;
 
 let _db = null;
 
+/**
+ * List of all the data stores in the DB.
+ */
 export const STORES = {
   REGISTRY:       'registry',
   DOWNLOAD_QUEUE: 'downloadQueue',
@@ -88,6 +91,20 @@ export async function dbGetAll(storeName) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const req = db.transaction(storeName, 'readonly').objectStore(storeName).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror  = () => reject(req.error);
+  });
+}
+
+/**
+ * Get all record ids from a store.
+ * @param {string} storeName
+ * @returns {Promise<string[]>}
+ */
+export async function dbGetAllIds(storeName) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(storeName, 'readonly').objectStore(storeName).getAllKeys();
     req.onsuccess = () => resolve(req.result);
     req.onerror  = () => reject(req.error);
   });

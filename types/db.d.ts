@@ -23,6 +23,12 @@ export function dbGet(storeName: string, key: string): Promise<any | undefined>;
  */
 export function dbGetAll(storeName: string): Promise<any[]>;
 /**
+ * Get all record ids from a store.
+ * @param {string} storeName
+ * @returns {Promise<string[]>}
+ */
+export function dbGetAllIds(storeName: string): Promise<string[]>;
+/**
  * Put (insert or replace) a record.
  * @param {string} storeName
  * @param {object} record

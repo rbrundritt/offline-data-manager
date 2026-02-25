@@ -1,21 +1,21 @@
 /**
  * deleter.js
- * Handles deletion of downloaded blobs and optionally registry entries.
+ * Handles deletion of downloaded array buffer and optionally registry entries.
  *
  * Deletion rules:
  *
  *   Protected entries (protected: true)
- *     Blob is cleared and queue is reset to 'pending' so the file re-downloads
+ *     ArrayBuffer is cleared and queue is reset to 'pending' so the file re-downloads
  *     on the next downloadFiles() call. Registry entry survives.
- *     Pass { removeRegistry: true } to override and fully remove.
+ *     Pass { removeProtected: true } to override and fully remove.
  *
  *   Non-protected entries (protected: false)
- *     Blob, queue entry, and registry entry are all removed.
+ *     BlArrayBufferob, queue entry, and registry entry are all removed.
  *
  *   In-progress downloads are aborted before deletion.
  */
 
-import { dbGet, dbGetAll, dbDelete, dbPut, STORES } from './db.js';
+import { dbGet, dbGetAllIds, dbDelete, dbPut, STORES } from './db.js';
 import { DOWNLOAD_STATUS } from './registry.js';
 import { abortDownload, abortAllDownloads } from './downloader.js';
 import { emit } from './events.js';
@@ -23,7 +23,7 @@ import { emit } from './events.js';
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
- * Resets a queue entry to pending, clearing the blob and all progress state.
+ * Resets a queue entry to pending, clearing the array buffer and all progress state.
  * Used for protected entries where the registry survives.
  * @param {string} id
  */
@@ -33,7 +33,7 @@ async function resetQueueEntry(id) {
   await dbPut(STORES.DOWNLOAD_QUEUE, {
     ...existing,
     status:          DOWNLOAD_STATUS.PENDING,
-    blob:            null,
+    data:            null,
     bytesDownloaded: 0,
     byteOffset:      0,
     retryCount:      0,
@@ -47,26 +47,26 @@ async function resetQueueEntry(id) {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Deletes a single file's blob and optionally its registry entry.
+ * Deletes a single file's array buffer and optionally its registry entry.
  *
  * @param {string} id
  * @param {object}  [options]
- * @param {boolean} [options.removeRegistry=false] — force registry removal for protected entries
+ * @param {boolean} [options.removeProtected=false] — force registry removal for protected entries
  * @returns {Promise<{ id: string, registryRemoved: boolean }>}
  */
-export async function deleteFile(id, { removeRegistry = false } = {}) {
+export async function deleteFile(id, { removeProtected = false } = {}) {
   const registryEntry = await dbGet(STORES.REGISTRY, id);
   if (!registryEntry) throw new Error(`deleteFile: No registered file with id "${id}".`);
 
   await abortDownload(id);
 
-  const shouldRemoveRegistry = removeRegistry || !registryEntry.protected;
+  const shouldRemoveRegistry = removeProtected || !registryEntry.protected;
 
   if (shouldRemoveRegistry) {
     await dbDelete(STORES.REGISTRY, id);
     await dbDelete(STORES.DOWNLOAD_QUEUE, id);
   } else {
-    // Protected — wipe blob and reset queue; registry stays, re-downloads next run
+    // Protected — wipe array buffer and reset queue; registry stays, re-downloads next run
     await resetQueueEntry(id);
   }
 
@@ -78,11 +78,11 @@ export async function deleteFile(id, { removeRegistry = false } = {}) {
  * Deletes all files. Protected entries follow the same rules as deleteFile().
  *
  * @param {object}  [options]
- * @param {boolean} [options.removeRegistry=false]
+ * @param {boolean} [options.removeProtected=false]
  * @returns {Promise<Array<{ id: string, registryRemoved: boolean }>>}
  */
-export async function deleteAllFiles({ removeRegistry = false } = {}) {
+export async function deleteAllFiles({ removeProtected = false } = {}) {
   await abortAllDownloads();
-  const allRegistry = await dbGetAll(STORES.REGISTRY);
-  return Promise.all(allRegistry.map((r) => deleteFile(r.id, { removeRegistry })));
+  const allRegistryIds = await dbGetAllIds(STORES.REGISTRY);
+  return Promise.all(allRegistryIds.map((id) => deleteFile(id, { removeProtected })));
 }

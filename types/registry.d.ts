@@ -18,7 +18,7 @@ export function isExpired(expiresAt: number | null): boolean;
  *
  * - New entry: added to registry, fresh pending queue entry created.
  * - Existing, version increased: registry updated, queue reset to pending.
- *   Existing blob remains accessible until the new download completes.
+ *   Existing array buffer remains accessible until the new download completes.
  * - Existing, version unchanged or lower: no-op.
  *
  * @param {object} entry
@@ -43,7 +43,7 @@ export function registerFiles(entries: object[]): Promise<{
  * Checks all complete queue entries against their TTL and flips any that have
  * expired to `expired` status, queuing them for re-download.
  *
- * Called internally by downloadFiles() before deciding what to download.
+ * Called internally by the download loop before each drain cycle.
  * @returns {Promise<string[]>} IDs of entries that were marked expired
  */
 export function evaluateExpiry(): Promise<string[]>;
@@ -53,7 +53,7 @@ export function evaluateExpiry(): Promise<string[]>;
  *
  * @returns {Promise<{ items: object[], storage: object }>}
  */
-export function view(): Promise<{
+export function getAllStatus(): Promise<{
     items: object[];
     storage: object;
 }>;
@@ -67,7 +67,7 @@ export function view(): Promise<{
 export function getStatus(id: string): Promise<object | null>;
 /**
  * Returns true if a file has data available (complete or expired).
- * An expired file still has a valid blob — it is simply due for refresh.
+ * An expired file still has a valid array buffer — it is simply due for refresh.
  *
  * @param {string} id
  * @returns {Promise<boolean>}

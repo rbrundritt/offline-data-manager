@@ -1,12 +1,26 @@
 /**
  * downloader.js
- * Download engine: chunked Range requests, parallel downloads,
- * exponential backoff retry, TTL expiry evaluation, storage-aware deferral,
- * resume support across page/SW restarts, and online/offline coordination.
+ * Download engine: persistent queue loop, chunked Range requests, parallel
+ * downloads, exponential backoff retry, TTL expiry evaluation, storage-aware
+ * deferral, resume on startup, and online/offline coordination.
  *
- * Files are stored as raw Blobs with no interpretation of their contents.
+ * Files are stored as ArrayBuffers with no interpretation of their contents.
  * MIME type is taken from the registry entry when set, or inferred from the
  * Content-Type response header when the registry entry has mimeType: null.
+ *
+ * ─── Loop model ──────────────────────────────────────────────────────────────
+ *
+ * Rather than a one-shot downloadFiles() that the caller must re-invoke,
+ * startDownloads() starts a persistent internal loop that:
+ *
+ *   1. Drains whatever is currently pending/paused/deferred/expired.
+ *   2. Waits (without polling) for new work to arrive.
+ *   3. Wakes immediately when registerFile() adds a new entry or when the
+ *      browser comes back online after an offline period.
+ *   4. Exits cleanly when stopDownloads() is called.
+ *
+ * The caller only needs to call startDownloads() once. Registering new files
+ * after that point will automatically trigger their download.
  */
 
 import { dbGet, dbGetAll, dbPut, STORES } from './db.js';
@@ -18,16 +32,35 @@ import { startConnectivityMonitor, isOnline } from './connectivity.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const CHUNK_SIZE           = 2 * 1024 * 1024; // 2 MB per Range request
-const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // Files over 5 MB use chunked Range requests
+const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // Files > 5 MB use chunked Range requests
 const DEFAULT_CONCURRENCY  = 2;
 const MAX_RETRY_COUNT      = 5;
-const BACKOFF_BASE_MS      = 1000;            // Doubles per retry: 1s, 2s, 4s, 8s, 16s
+const BACKOFF_BASE_MS      = 1000;             // Doubles per retry: 1s, 2s, 4s, 8s, 16s
+
+// ─── Loop state ───────────────────────────────────────────────────────────────
 
 // Active AbortControllers keyed by file id
 const _activeDownloads = new Map();
 
-// Options from the most recent downloadFiles() call, used when auto-resuming after reconnect
-let _lastDownloadOptions = {};
+// Set when the loop is running; cleared by stopDownloads()
+let _loopRunning = false;
+
+// Wake mechanism — a pending Promise that resolves when new work arrives.
+// _notifyNewWork() triggers it; the loop awaits _wakeSignal() when idle.
+let _wakeResolve = null;
+
+function _wakeSignal() {
+  return new Promise((resolve) => { _wakeResolve = resolve; });
+}
+
+/** Called by registerFile() and the connectivity monitor to wake the loop. */
+export function _notifyNewWork() {
+  if (_wakeResolve) {
+    const resolve = _wakeResolve;
+    _wakeResolve  = null;
+    resolve();
+  }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,14 +75,10 @@ async function updateQueue(id, patch) {
 /**
  * Probes a URL with HEAD to determine Range support, content size, and MIME type.
  *
- * Content-Length is only reliable when the server is NOT applying content-encoding
- * (gzip/br/deflate). When Content-Encoding is present Content-Length reflects the
- * compressed transfer size, not the decompressed bytes stored — so we return
- * totalBytes: null and let progress show as indeterminate.
- *
- * @param {string} url
- * @param {AbortSignal} signal
- * @returns {Promise<{ supportsRange: boolean, totalBytes: number|null, mimeType: string|null }>}
+ * Content-Length is only reliable when the server is NOT applying
+ * content-encoding. When Content-Encoding is present it reflects the compressed
+ * transfer size, not the stored bytes — so we return totalBytes: null and let
+ * progress show as indeterminate.
  */
 async function probeFile(url, signal) {
   try {
@@ -68,11 +97,7 @@ async function probeFile(url, signal) {
 
 /**
  * Strips charset and other parameters from a Content-Type header value.
- * Returns null if the input is absent or empty.
  * e.g. 'application/json; charset=utf-8' → 'application/json'
- *
- * @param {string|null} contentType
- * @returns {string|null}
  */
 function parseMimeType(contentType) {
   if (!contentType) return null;
@@ -80,9 +105,7 @@ function parseMimeType(contentType) {
   return mime || null;
 }
 
-/**
- * Merges an array of Uint8Array chunks into a single contiguous Uint8Array.
- */
+/** Merges an array of Uint8Array chunks into a single contiguous Uint8Array. */
 function mergeChunks(chunks) {
   const totalLength = chunks.reduce((n, c) => n + c.byteLength, 0);
   const merged      = new Uint8Array(totalLength);
@@ -94,17 +117,14 @@ function mergeChunks(chunks) {
 // ─── Core download logic ──────────────────────────────────────────────────────
 
 /**
- * Downloads a single file with retry/backoff. On success stores the result as a
- * typed Blob directly on the queue record.
+ * Downloads a single file with retry/backoff. On success stores the result as
+ * an ArrayBuffer with a resolved mimeType directly on the queue record.
  *
  * MIME type resolution order:
  *   1. registryEntry.mimeType if explicitly set
  *   2. Content-Type from the HEAD probe
  *   3. Content-Type from the GET response headers
  *   4. 'application/octet-stream' as a final fallback
- *
- * @param {object} registryEntry
- * @returns {Promise<void>}
  */
 async function downloadSingleFile(registryEntry) {
   const { id, downloadUrl, ttl } = registryEntry;
@@ -130,7 +150,7 @@ async function downloadSingleFile(registryEntry) {
 
       let supportsRange    = false;
       let totalBytes       = queueEntry?.totalBytes ?? registryEntry.totalBytes ?? null;
-      let resolvedMimeType = registryEntry.mimeType ?? null; // may be null — filled in below
+      let resolvedMimeType = registryEntry.mimeType ?? null;
 
       if (byteOffset === 0) {
         const probe   = await probeFile(downloadUrl, abortController.signal);
@@ -139,37 +159,37 @@ async function downloadSingleFile(registryEntry) {
           totalBytes = probe.totalBytes;
           await updateQueue(id, { totalBytes });
         }
-        // Use probed MIME type only when registry didn't specify one
         if (!resolvedMimeType && probe.mimeType) {
           resolvedMimeType = probe.mimeType;
         }
       } else {
-        supportsRange = true; // Used Range before — assume still supported
+        supportsRange = true;
       }
 
       const useChunking = supportsRange && totalBytes && totalBytes > LARGE_FILE_THRESHOLD;
-      let buffer;
-      let responseMimeType = null; // filled by downloadFull when not chunking
+      let uint8;
+      let responseMimeType = null;
 
       if (useChunking) {
-        buffer = await downloadInChunks(id, downloadUrl, byteOffset, totalBytes, abortController.signal);
+        uint8 = await downloadInChunks(id, downloadUrl, byteOffset, totalBytes, abortController.signal);
       } else {
         const result = await downloadFull(id, downloadUrl, abortController.signal);
-        buffer           = result.buffer;
+        uint8            = result.uint8;
         responseMimeType = result.mimeType;
       }
 
-      // Final MIME type: registry > probe > GET response > fallback
+      // uint8.buffer gives us the underlying ArrayBuffer
       const mimeType    = resolvedMimeType ?? responseMimeType ?? 'application/octet-stream';
-      const blob        = new Blob([buffer], { type: mimeType });
+      const data        = uint8.buffer;
       const completedAt = Date.now();
       const expiresAt   = computeExpiresAt(completedAt, ttl);
 
       await updateQueue(id, {
         status:          DOWNLOAD_STATUS.COMPLETE,
-        blob,
-        bytesDownloaded: buffer.byteLength,
-        byteOffset:      buffer.byteLength,
+        data,
+        mimeType,
+        bytesDownloaded: data.byteLength,
+        byteOffset:      data.byteLength,
         completedAt,
         expiresAt,
         errorMessage:    null,
@@ -210,10 +230,7 @@ async function downloadSingleFile(registryEntry) {
   }
 }
 
-/**
- * Downloads the full file in a single GET request.
- * Returns { buffer: Uint8Array, mimeType: string|null }
- */
+/** Downloads the full file in a single GET request. Returns { uint8, mimeType }. */
 async function downloadFull(id, downloadUrl, signal) {
   const response = await fetch(downloadUrl, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -242,13 +259,10 @@ async function downloadFull(id, downloadUrl, signal) {
     });
   }
 
-  return { buffer: mergeChunks(chunks), mimeType };
+  return { uint8: mergeChunks(chunks), mimeType };
 }
 
-/**
- * Downloads a file in sequential Range request chunks, resuming from byteOffset.
- * Returns a Uint8Array of the complete file bytes.
- */
+/** Downloads a file in sequential Range request chunks. Returns a Uint8Array. */
 async function downloadInChunks(id, downloadUrl, startOffset, totalBytes, signal) {
   let offset     = startOffset;
   const chunks   = [];
@@ -282,66 +296,17 @@ async function downloadInChunks(id, downloadUrl, startOffset, totalBytes, signal
   return mergeChunks(chunks);
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── Queue drain ──────────────────────────────────────────────────────────────
 
 /**
- * Evaluates TTL expiry, then downloads everything that needs it.
+ * Runs one drain cycle: evaluates TTL expiry, reads the queue, and downloads
+ * all eligible entries up to `concurrency` in parallel.
  *
- * Eligible statuses (when resumeOnly is false):
- *   pending, in-progress, paused, deferred, expired
- *   + failed entries when retryFailed: true
- *
- * If the browser is currently offline, the call returns immediately after
- * marking any in-progress entries as paused. Downloads will auto-resume
- * when connectivity is restored (if startConnectivityMonitor() was called).
- *
- * @param {object}  [options]
- * @param {number}  [options.concurrency=2]    — max parallel downloads
- * @param {boolean} [options.resumeOnly=false] — only resume in-progress/paused
- * @param {boolean} [options.retryFailed=false] — re-queue failed entries before running
- * @returns {Promise<void>}
+ * Returns when all eligible entries have been processed (completed, failed,
+ * or deferred). Does not loop — startDownloads() calls this repeatedly.
  */
-export async function downloadFiles({
-  concurrency  = DEFAULT_CONCURRENCY,
-  resumeOnly   = false,
-  retryFailed  = false,
-} = {}) {
-  // Remember options so the connectivity monitor can re-use them on reconnect
-  _lastDownloadOptions = { concurrency, resumeOnly, retryFailed };
-
-  // If offline, pause anything in-progress and bail — don't burn retry attempts
-  if (!isOnline()) {
-    const allQueue = await dbGetAll(STORES.DOWNLOAD_QUEUE);
-    for (const entry of allQueue) {
-      if (entry.status === DOWNLOAD_STATUS.IN_PROGRESS) {
-        _activeDownloads.get(entry.id)?.abort();
-        _activeDownloads.delete(entry.id);
-        await updateQueue(entry.id, {
-          status:        DOWNLOAD_STATUS.PAUSED,
-          deferredReason: 'network-offline',
-        });
-      }
-    }
-    emit('connectivity', { online: false });
-    return;
-  }
-
-  // Check TTL expiry before deciding what to download
+async function drainQueue(concurrency) {
   await evaluateExpiry();
-
-  // Optionally reset failed entries so they'll be picked up this run
-  if (retryFailed) {
-    const allQueue = await dbGetAll(STORES.DOWNLOAD_QUEUE);
-    for (const entry of allQueue) {
-      if (entry.status === DOWNLOAD_STATUS.FAILED) {
-        await updateQueue(entry.id, {
-          status:       DOWNLOAD_STATUS.PENDING,
-          retryCount:   0,
-          errorMessage: null,
-        });
-      }
-    }
-  }
 
   const [allRegistry, allQueue] = await Promise.all([
     dbGetAll(STORES.REGISTRY),
@@ -350,66 +315,142 @@ export async function downloadFiles({
 
   const registryMap = new Map(allRegistry.map((r) => [r.id, r]));
 
-  const eligibleStatuses = resumeOnly
-    ? [DOWNLOAD_STATUS.IN_PROGRESS, DOWNLOAD_STATUS.PAUSED]
-    : [
-        DOWNLOAD_STATUS.PENDING,
-        DOWNLOAD_STATUS.IN_PROGRESS,
-        DOWNLOAD_STATUS.PAUSED,
-        DOWNLOAD_STATUS.DEFERRED,
-        DOWNLOAD_STATUS.EXPIRED,
-      ];
+  const eligible = allQueue
+    .filter((q) => [
+      DOWNLOAD_STATUS.PENDING,
+      DOWNLOAD_STATUS.IN_PROGRESS,
+      DOWNLOAD_STATUS.PAUSED,
+      DOWNLOAD_STATUS.DEFERRED,
+      DOWNLOAD_STATUS.EXPIRED,
+    ].includes(q.status))
+    .sort((a, b) => (registryMap.get(a.id)?.priority ?? 10) - (registryMap.get(b.id)?.priority ?? 10));
 
-  const toDownload = allQueue
-    .filter((q) => eligibleStatuses.includes(q.status))
-    .sort((a, b) => {
-      const pa = registryMap.get(a.id)?.priority ?? 10;
-      const pb = registryMap.get(b.id)?.priority ?? 10;
-      return pa - pb;
-    });
+  if (eligible.length === 0) return;
 
-  const queue    = [...toDownload];
+  const queue    = [...eligible];
   const inFlight = new Set();
 
-  function runNext() {
-    if (queue.length === 0) return;
-    const queueEntry    = queue.shift();
-    const registryEntry = registryMap.get(queueEntry.id);
-    if (!registryEntry) return;
-
-    const p = (async () => {
-      // Storage check — defer rather than skip if space is insufficient
-      const needed = registryEntry.totalBytes ?? queueEntry.totalBytes ?? 0;
-      if (needed > 0 && !(await hasEnoughSpace(needed))) {
-        await updateQueue(queueEntry.id, {
-          status:         DOWNLOAD_STATUS.DEFERRED,
-          deferredReason: 'insufficient-storage',
-        });
-        emit('deferred', { id: queueEntry.id, reason: 'insufficient-storage' });
-        return;
-      }
-      await downloadSingleFile(registryEntry);
-    })().finally(() => { inFlight.delete(p); runNext(); });
-
-    inFlight.add(p);
-  }
-
-  const initialBatch = Math.min(concurrency, queue.length);
-  for (let i = 0; i < initialBatch; i++) runNext();
-
   await new Promise((resolve) => {
-    const interval = setInterval(() => {
-      if (inFlight.size === 0 && queue.length === 0) {
-        clearInterval(interval);
-        resolve();
-      }
-    }, 100);
+    function runNext() {
+      if (!_loopRunning)          { resolve(); return; }
+      if (queue.length === 0)     { if (inFlight.size === 0) resolve(); return; }
+      if (inFlight.size >= concurrency) return;
+
+      const queueEntry    = queue.shift();
+      const registryEntry = registryMap.get(queueEntry.id);
+      if (!registryEntry) { runNext(); return; }
+
+      const p = (async () => {
+        const needed = registryEntry.totalBytes ?? queueEntry.totalBytes ?? 0;
+        if (needed > 0 && !(await hasEnoughSpace(needed))) {
+          await updateQueue(queueEntry.id, {
+            status:         DOWNLOAD_STATUS.DEFERRED,
+            deferredReason: 'insufficient-storage',
+          });
+          emit('deferred', { id: queueEntry.id, reason: 'insufficient-storage' });
+          return;
+        }
+        await downloadSingleFile(registryEntry);
+      })().finally(() => { inFlight.delete(p); runNext(); });
+
+      inFlight.add(p);
+      runNext(); // fill remaining concurrency slots immediately
+    }
+
+    runNext();
   });
 }
 
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 /**
- * Aborts an active download, setting it to 'paused'.
- * It will resume on the next downloadFiles() call.
+ * Starts the persistent download loop.
+ *
+ * The loop drains the queue, then waits for new work without polling.
+ * It wakes automatically when:
+ *   - registerFile() / registerFiles() adds a new or updated entry
+ *   - The browser comes back online after an offline period
+ *   - retryFailed() is called
+ *
+ * Idempotent — subsequent calls while already running are a no-op.
+ *
+ * @param {object} [options]
+ * @param {number} [options.concurrency=2] — max parallel downloads
+ */
+export function startDownloads({ concurrency = DEFAULT_CONCURRENCY } = {}) {
+  if (_loopRunning) return;
+  _loopRunning = true;
+
+  (async () => {
+    while (_loopRunning) {
+      if (!isOnline()) {
+        // Offline — pause anything in-progress and wait for the online event
+        const allQueue = await dbGetAll(STORES.DOWNLOAD_QUEUE);
+        for (const entry of allQueue) {
+          if (entry.status === DOWNLOAD_STATUS.IN_PROGRESS) {
+            _activeDownloads.get(entry.id)?.abort();
+            _activeDownloads.delete(entry.id);
+            await updateQueue(entry.id, {
+              status:         DOWNLOAD_STATUS.PAUSED,
+              deferredReason: 'network-offline',
+            });
+          }
+        }
+        emit('connectivity', { online: false });
+        await _wakeSignal();
+        continue;
+      }
+
+      await drainQueue(concurrency);
+
+      // Queue is empty — wait for new work before looping again
+      if (_loopRunning) await _wakeSignal();
+    }
+  })();
+}
+
+/**
+ * Stops the download loop gracefully.
+ *
+ * In-flight downloads are aborted and set to 'paused'. They will resume
+ * automatically when startDownloads() is called again.
+ */
+export async function stopDownloads() {
+  _loopRunning = false;
+  _notifyNewWork(); // unblock the loop if it's waiting on _wakeSignal
+  await abortAllDownloads();
+  emit('stopped', {});
+}
+
+/**
+ * Re-queues all failed entries and wakes the loop to retry them.
+ * Only meaningful when the loop is running via startDownloads().
+ */
+export async function retryFailed() {
+  const allQueue = await dbGetAll(STORES.DOWNLOAD_QUEUE);
+  for (const entry of allQueue) {
+    if (entry.status === DOWNLOAD_STATUS.FAILED) {
+      await updateQueue(entry.id, {
+        status:       DOWNLOAD_STATUS.PENDING,
+        retryCount:   0,
+        errorMessage: null,
+      });
+    }
+  }
+  _notifyNewWork();
+}
+
+/**
+ * Returns true if the download loop is currently running.
+ * @returns {boolean}
+ */
+export function isDownloading() {
+  return _loopRunning;
+}
+
+/**
+ * Aborts a single active download, setting it to 'paused'.
+ * The loop will pick it up again on the next drain cycle.
  * @param {string} id
  */
 export async function abortDownload(id) {
@@ -418,7 +459,7 @@ export async function abortDownload(id) {
 }
 
 /**
- * Aborts all active downloads.
+ * Aborts all active downloads, setting them to 'paused'.
  */
 export async function abortAllDownloads() {
   for (const [id, ctrl] of _activeDownloads) {
@@ -428,34 +469,20 @@ export async function abortAllDownloads() {
 }
 
 /**
- * Resumes any downloads interrupted by a previous page or SW close.
- * Call this in a service worker 'activate' event.
- * @returns {Promise<void>}
- */
-export async function resumeInterruptedDownloads() {
-  await downloadFiles({ resumeOnly: true });
-}
-
-/**
  * Starts monitoring online/offline connectivity.
  *
- * - Going offline: all active downloads are paused immediately.
- * - Coming back online: downloadFiles() is called automatically with the
- *   same options as the most recent explicit call.
+ * Going offline: aborts active downloads immediately (pauses them).
+ * Coming back online: wakes the download loop to resume.
  *
- * Idempotent — safe to call multiple times. Call stopConnectivityMonitor()
- * to remove the listeners (useful in tests or cleanup).
+ * Idempotent — safe to call multiple times.
+ * Emits 'connectivity' events: { online: boolean }.
  */
 export function startMonitoring() {
   startConnectivityMonitor({
     pauseAll:  abortAllDownloads,
-    resumeAll: () => downloadFiles(_lastDownloadOptions),
+    resumeAll: _notifyNewWork,
   });
 }
 
-/**
- * Stops online/offline monitoring.
- * Re-exported from connectivity.js for convenience.
- */
 export { stopConnectivityMonitor as stopMonitoring } from './connectivity.js';
-export { isOnline, isMonitoring } from './connectivity.js';
+export { isOnline, isMonitoring }                    from './connectivity.js';
