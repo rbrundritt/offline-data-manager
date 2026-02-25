@@ -31,11 +31,11 @@ import { startConnectivityMonitor, isOnline } from './connectivity.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CHUNK_SIZE           = 2 * 1024 * 1024; // 2 MB per Range request
+const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB per Range request
 const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // Files > 5 MB use chunked Range requests
-const DEFAULT_CONCURRENCY  = 2;
-const MAX_RETRY_COUNT      = 5;
-const BACKOFF_BASE_MS      = 1000;             // Doubles per retry: 1s, 2s, 4s, 8s, 16s
+const DEFAULT_CONCURRENCY = 2;
+const MAX_RETRY_COUNT = 5;
+const BACKOFF_BASE_MS = 1000;             // Doubles per retry: 1s, 2s, 4s, 8s, 16s
 
 // ─── Loop state ───────────────────────────────────────────────────────────────
 
@@ -57,15 +57,15 @@ function _wakeSignal() {
 export function _notifyNewWork() {
   if (_wakeResolve) {
     const resolve = _wakeResolve;
-    _wakeResolve  = null;
+    _wakeResolve = null;
     resolve();
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const sleep        = (ms) => new Promise((r) => setTimeout(r, ms));
-const backoffDelay = (n)  => BACKOFF_BASE_MS * Math.pow(2, n);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const backoffDelay = (n) => BACKOFF_BASE_MS * Math.pow(2, n);
 
 async function updateQueue(id, patch) {
   const entry = await dbGet(STORES.DOWNLOAD_QUEUE, id);
@@ -82,13 +82,13 @@ async function updateQueue(id, patch) {
  */
 async function probeFile(url, signal) {
   try {
-    const res           = await fetch(url, { method: 'HEAD', signal });
+    const res = await fetch(url, { method: 'HEAD', signal });
     const acceptsRanges = res.headers.get('Accept-Ranges') === 'bytes';
-    const encoding      = res.headers.get('Content-Encoding');
-    const isEncoded     = !!encoding && encoding !== 'identity';
+    const encoding = res.headers.get('Content-Encoding');
+    const isEncoded = !!encoding && encoding !== 'identity';
     const contentLength = res.headers.get('Content-Length');
-    const totalBytes    = (contentLength && !isEncoded) ? parseInt(contentLength, 10) : null;
-    const mimeType      = parseMimeType(res.headers.get('Content-Type'));
+    const totalBytes = (contentLength && !isEncoded) ? parseInt(contentLength, 10) : null;
+    const mimeType = parseMimeType(res.headers.get('Content-Type'));
     return { supportsRange: acceptsRanges, totalBytes, mimeType };
   } catch {
     return { supportsRange: false, totalBytes: null, mimeType: null };
@@ -108,8 +108,8 @@ function parseMimeType(contentType) {
 /** Merges an array of Uint8Array chunks into a single contiguous Uint8Array. */
 function mergeChunks(chunks) {
   const totalLength = chunks.reduce((n, c) => n + c.byteLength, 0);
-  const merged      = new Uint8Array(totalLength);
-  let offset        = 0;
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
   for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength; }
   return merged;
 }
@@ -137,10 +137,10 @@ async function downloadSingleFile(registryEntry) {
   while (retryCount <= MAX_RETRY_COUNT) {
     try {
       await updateQueue(id, {
-        status:        DOWNLOAD_STATUS.IN_PROGRESS,
+        status: DOWNLOAD_STATUS.IN_PROGRESS,
         lastAttemptAt: Date.now(),
         retryCount,
-        errorMessage:  null,
+        errorMessage: null,
       });
       emit('status', { id, status: DOWNLOAD_STATUS.IN_PROGRESS });
 
@@ -148,12 +148,12 @@ async function downloadSingleFile(registryEntry) {
       queueEntry = await dbGet(STORES.DOWNLOAD_QUEUE, id);
       const byteOffset = queueEntry?.byteOffset ?? 0;
 
-      let supportsRange    = false;
-      let totalBytes       = queueEntry?.totalBytes ?? registryEntry.totalBytes ?? null;
+      let supportsRange = false;
+      let totalBytes = queueEntry?.totalBytes ?? registryEntry.totalBytes ?? null;
       let resolvedMimeType = registryEntry.mimeType ?? null;
 
       if (byteOffset === 0) {
-        const probe   = await probeFile(downloadUrl, abortController.signal);
+        const probe = await probeFile(downloadUrl, abortController.signal);
         supportsRange = probe.supportsRange;
         if (probe.totalBytes) {
           totalBytes = probe.totalBytes;
@@ -174,26 +174,26 @@ async function downloadSingleFile(registryEntry) {
         uint8 = await downloadInChunks(id, downloadUrl, byteOffset, totalBytes, abortController.signal);
       } else {
         const result = await downloadFull(id, downloadUrl, abortController.signal);
-        uint8            = result.uint8;
+        uint8 = result.uint8;
         responseMimeType = result.mimeType;
       }
 
       // uint8.buffer gives us the underlying ArrayBuffer
-      const mimeType    = resolvedMimeType ?? responseMimeType ?? 'application/octet-stream';
-      const data        = uint8.buffer;
+      const mimeType = resolvedMimeType ?? responseMimeType ?? 'application/octet-stream';
+      const data = uint8.buffer;
       const completedAt = Date.now();
-      const expiresAt   = computeExpiresAt(completedAt, ttl);
+      const expiresAt = computeExpiresAt(completedAt, ttl);
 
       await updateQueue(id, {
-        status:          DOWNLOAD_STATUS.COMPLETE,
+        status: DOWNLOAD_STATUS.COMPLETE,
         data,
         mimeType,
         bytesDownloaded: data.byteLength,
-        byteOffset:      data.byteLength,
+        byteOffset: data.byteLength,
         completedAt,
         expiresAt,
-        errorMessage:    null,
-        deferredReason:  null,
+        errorMessage: null,
+        deferredReason: null,
       });
 
       emit('complete', { id, mimeType });
@@ -201,7 +201,16 @@ async function downloadSingleFile(registryEntry) {
       return;
 
     } catch (err) {
-      if (err.name === 'AbortError') {
+      if (err?.name === 'QuotaExceededError') {
+        //We reached the storage limits. Need to stop all downloads and trigger event.
+        await stopDownloads();
+        await updateQueue(id, {
+          status: DOWNLOAD_STATUS.DEFERRED,
+          deferredReason: 'insufficient-storage',
+        });
+        emit('error', { id: id, reason: 'insufficient-storage', willRetry: false });
+        return;
+      } else if (err?.name === 'AbortError') {
         await updateQueue(id, { status: DOWNLOAD_STATUS.PAUSED });
         emit('status', { id, status: DOWNLOAD_STATUS.PAUSED });
         _activeDownloads.delete(id);
@@ -212,7 +221,7 @@ async function downloadSingleFile(registryEntry) {
 
       if (retryCount > MAX_RETRY_COUNT) {
         await updateQueue(id, {
-          status:       DOWNLOAD_STATUS.FAILED,
+          status: DOWNLOAD_STATUS.FAILED,
           retryCount,
           errorMessage: err.message,
         });
@@ -235,14 +244,14 @@ async function downloadFull(id, downloadUrl, signal) {
   const response = await fetch(downloadUrl, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
 
-  const encoding   = response.headers.get('Content-Encoding');
-  const isEncoded  = !!encoding && encoding !== 'identity';
-  const rawLength  = response.headers.get('Content-Length');
+  const encoding = response.headers.get('Content-Encoding');
+  const isEncoded = !!encoding && encoding !== 'identity';
+  const rawLength = response.headers.get('Content-Length');
   const totalBytes = (rawLength && !isEncoded) ? parseInt(rawLength, 10) : null;
-  const mimeType   = parseMimeType(response.headers.get('Content-Type'));
+  const mimeType = parseMimeType(response.headers.get('Content-Type'));
 
-  const reader   = response.body.getReader();
-  const chunks   = [];
+  const reader = response.body.getReader();
+  const chunks = [];
   let downloaded = 0;
 
   while (true) {
@@ -264,12 +273,12 @@ async function downloadFull(id, downloadUrl, signal) {
 
 /** Downloads a file in sequential Range request chunks. Returns a Uint8Array. */
 async function downloadInChunks(id, downloadUrl, startOffset, totalBytes, signal) {
-  let offset     = startOffset;
-  const chunks   = [];
+  let offset = startOffset;
+  const chunks = [];
   let downloaded = startOffset;
 
   while (offset < totalBytes) {
-    const end      = Math.min(offset + CHUNK_SIZE - 1, totalBytes - 1);
+    const end = Math.min(offset + CHUNK_SIZE - 1, totalBytes - 1);
     const response = await fetch(downloadUrl, {
       signal,
       headers: { Range: `bytes=${offset}-${end}` },
@@ -281,7 +290,7 @@ async function downloadInChunks(id, downloadUrl, startOffset, totalBytes, signal
 
     const chunk = new Uint8Array(await response.arrayBuffer());
     chunks.push(chunk);
-    offset     += chunk.byteLength;
+    offset += chunk.byteLength;
     downloaded += chunk.byteLength;
 
     await updateQueue(id, { bytesDownloaded: downloaded, byteOffset: offset });
@@ -327,16 +336,16 @@ async function drainQueue(concurrency) {
 
   if (eligible.length === 0) return;
 
-  const queue    = [...eligible];
+  const queue = [...eligible];
   const inFlight = new Set();
 
   await new Promise((resolve) => {
     function runNext() {
-      if (!_loopRunning)          { resolve(); return; }
-      if (queue.length === 0)     { if (inFlight.size === 0) resolve(); return; }
+      if (!_loopRunning) { resolve(); return; }
+      if (queue.length === 0) { if (inFlight.size === 0) resolve(); return; }
       if (inFlight.size >= concurrency) return;
 
-      const queueEntry    = queue.shift();
+      const queueEntry = queue.shift();
       const registryEntry = registryMap.get(queueEntry.id);
       if (!registryEntry) { runNext(); return; }
 
@@ -344,7 +353,7 @@ async function drainQueue(concurrency) {
         const needed = registryEntry.totalBytes ?? queueEntry.totalBytes ?? 0;
         if (needed > 0 && !(await hasEnoughSpace(needed))) {
           await updateQueue(queueEntry.id, {
-            status:         DOWNLOAD_STATUS.DEFERRED,
+            status: DOWNLOAD_STATUS.DEFERRED,
             deferredReason: 'insufficient-storage',
           });
           emit('deferred', { id: queueEntry.id, reason: 'insufficient-storage' });
@@ -391,7 +400,7 @@ export function startDownloads({ concurrency = DEFAULT_CONCURRENCY } = {}) {
             _activeDownloads.get(entry.id)?.abort();
             _activeDownloads.delete(entry.id);
             await updateQueue(entry.id, {
-              status:         DOWNLOAD_STATUS.PAUSED,
+              status: DOWNLOAD_STATUS.PAUSED,
               deferredReason: 'network-offline',
             });
           }
@@ -431,8 +440,8 @@ export async function retryFailed() {
   for (const entry of allQueue) {
     if (entry.status === DOWNLOAD_STATUS.FAILED) {
       await updateQueue(entry.id, {
-        status:       DOWNLOAD_STATUS.PENDING,
-        retryCount:   0,
+        status: DOWNLOAD_STATUS.PENDING,
+        retryCount: 0,
         errorMessage: null,
       });
     }
@@ -479,10 +488,10 @@ export async function abortAllDownloads() {
  */
 export function startMonitoring() {
   startConnectivityMonitor({
-    pauseAll:  abortAllDownloads,
+    pauseAll: abortAllDownloads,
     resumeAll: _notifyNewWork,
   });
 }
 
 export { stopConnectivityMonitor as stopMonitoring } from './connectivity.js';
-export { isOnline, isMonitoring }                    from './connectivity.js';
+export { isOnline, isMonitoring } from './connectivity.js';

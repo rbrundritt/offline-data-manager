@@ -40,6 +40,13 @@ export function registerFiles(entries: object[]): Promise<{
     removed: string[];
 }>;
 /**
+ * Updates the metadata in the registry. Adds to, doesn't replace it. Pass in an empty object to clear as null will be ignored.
+ * @param {string} id The of the registry record to update.
+ * @param {Object} metadata The metadata object to merge.
+ * @returns {Promise<void>}
+ */
+export function updateRegistryMetadata(id: string, metadata: Object): Promise<void>;
+/**
  * Checks all complete queue entries against their TTL and flips any that have
  * expired to `expired` status, queuing them for re-download.
  *

@@ -29,6 +29,7 @@ declare namespace OfflineDataManager {
 }
 import { registerFile } from './registry.js';
 import { registerFiles } from './registry.js';
+import { updateRegistryMetadata } from './registry.js';
 import { startDownloads } from './downloader.js';
 import { stopDownloads } from './downloader.js';
 import { retryFailed } from './downloader.js';
@@ -68,4 +69,4 @@ import { requestPersistentStorage } from './storage.js';
 import { isPersistentStorage } from './storage.js';
 import { setDBInfo } from './db.js';
 import { dbGetAllIds } from './db.js';
-export { registerFile, registerFiles, startDownloads, stopDownloads, retryFailed, isDownloading, abortDownload, abortAllDownloads, startMonitoring, stopMonitoring, isOnline, isMonitoring, getAllStatus, getStatus, isReady, deleteFile, deleteAllFiles, on, off, once, emit, getStorageEstimate, requestPersistentStorage, isPersistentStorage };
+export { registerFile, registerFiles, updateRegistryMetadata, startDownloads, stopDownloads, retryFailed, isDownloading, abortDownload, abortAllDownloads, startMonitoring, stopMonitoring, isOnline, isMonitoring, getAllStatus, getStatus, isReady, deleteFile, deleteAllFiles, on, off, once, emit, getStorageEstimate, requestPersistentStorage, isPersistentStorage };

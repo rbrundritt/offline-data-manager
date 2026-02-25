@@ -52,13 +52,13 @@ import { getStorageEstimate, formatBytes } from './storage.js';
 import { _notifyNewWork } from './downloader.js';
 
 export const DOWNLOAD_STATUS = {
-  PENDING:     'pending',
+  PENDING: 'pending',
   IN_PROGRESS: 'in-progress',
-  PAUSED:      'paused',
-  COMPLETE:    'complete',
-  EXPIRED:     'expired',
-  FAILED:      'failed',
-  DEFERRED:    'deferred',
+  PAUSED: 'paused',
+  COMPLETE: 'complete',
+  EXPIRED: 'expired',
+  FAILED: 'failed',
+  DEFERRED: 'deferred',
 };
 
 // Statuses where the array buffer data is present and accessible
@@ -95,17 +95,17 @@ function validateEntry(entry) {
 function makeQueueEntry(id) {
   return {
     id,
-    status:          DOWNLOAD_STATUS.PENDING,
-    data:            null,
+    status: DOWNLOAD_STATUS.PENDING,
+    data: null,
     bytesDownloaded: 0,
-    totalBytes:      null,
-    byteOffset:      0,
-    retryCount:      0,
-    lastAttemptAt:   null,
-    errorMessage:    null,
-    deferredReason:  null,
-    completedAt:     null,
-    expiresAt:       null,
+    totalBytes: null,
+    byteOffset: 0,
+    retryCount: 0,
+    lastAttemptAt: null,
+    errorMessage: null,
+    deferredReason: null,
+    completedAt: null,
+    expiresAt: null,
   };
 }
 
@@ -146,59 +146,68 @@ export function isExpired(expiresAt) {
  * @returns {Promise<void>}
  */
 export async function registerFile(entry) {
-  validateEntry(entry);
+  try {
+    validateEntry(entry);
 
-  const now      = Date.now();
-  const existing = await dbGet(STORES.REGISTRY, entry.id);
-  const existingQueue = await dbGet(STORES.DOWNLOAD_QUEUE, entry.id);
+    const now = Date.now();
+    const existing = await dbGet(STORES.REGISTRY, entry.id);
+    const existingQueue = await dbGet(STORES.DOWNLOAD_QUEUE, entry.id);
 
-  const registryRecord = {
-    id:          entry.id,
-    downloadUrl: entry.downloadUrl,
-    mimeType:    entry.mimeType    ?? null,
-    version:     entry.version,
-    protected:   entry.protected  ?? false,
-    priority:    entry.priority   ?? 10,
-    ttl:         entry.ttl        ?? 0,
-    totalBytes:  entry.totalBytes ?? null,
-    metadata:    entry.metadata   ?? {},
-    registeredAt: existing?.registeredAt ?? now,
-    updatedAt:    now,
-  };
+    const registryRecord = {
+      id: entry.id,
+      downloadUrl: entry.downloadUrl,
+      mimeType: entry.mimeType ?? null,
+      version: entry.version,
+      protected: entry.protected ?? false,
+      priority: entry.priority ?? 10,
+      ttl: entry.ttl ?? 0,
+      totalBytes: entry.totalBytes ?? null,
+      metadata: entry.metadata ?? {},
+      registeredAt: existing?.registeredAt ?? now,
+      updatedAt: now,
+    };
 
-  if (existing) {
-    if (entry.version > existing.version) {
-      await dbPut(STORES.REGISTRY, registryRecord);
+    if (existing) {
+      if (entry.version > existing.version) {
+        await dbPut(STORES.REGISTRY, registryRecord);
 
-      // Preserve the existing data array buffer while re-queuing so data stays accessible
-      const newQueueEntry = existingQueue
-        ? {
+        // Preserve the existing data array buffer while re-queuing so data stays accessible
+        const newQueueEntry = existingQueue
+          ? {
             ...existingQueue,
-            status:          DOWNLOAD_STATUS.PENDING,
+            status: DOWNLOAD_STATUS.PENDING,
             bytesDownloaded: 0,
-            byteOffset:      0,
-            retryCount:      0,
-            errorMessage:    null,
-            deferredReason:  null,
-            completedAt:     null,
-            expiresAt:       null,
+            byteOffset: 0,
+            retryCount: 0,
+            errorMessage: null,
+            deferredReason: null,
+            completedAt: null,
+            expiresAt: null,
             // data array buffer intentionally kept so retrieve() still works during re-download
           }
-        : makeQueueEntry(entry.id);
+          : makeQueueEntry(entry.id);
 
-      await dbPut(STORES.DOWNLOAD_QUEUE, newQueueEntry);
-      emit('registered', { id: entry.id, reason: 'version-updated' });
-      _notifyNewWork();
+        await dbPut(STORES.DOWNLOAD_QUEUE, newQueueEntry);
+        emit('registered', { id: entry.id, reason: 'version-updated' });
+        _notifyNewWork();
+      }
+      // Version unchanged or lower — no-op
+      return;
     }
-    // Version unchanged or lower — no-op
-    return;
-  }
 
-  // Brand new entry
-  await dbPut(STORES.REGISTRY, registryRecord);
-  await dbPut(STORES.DOWNLOAD_QUEUE, makeQueueEntry(entry.id));
-  emit('registered', { id: entry.id, reason: 'new' });
-  _notifyNewWork();
+    // Brand new entry
+    await dbPut(STORES.REGISTRY, registryRecord);
+    await dbPut(STORES.DOWNLOAD_QUEUE, makeQueueEntry(entry.id));
+    emit('registered', { id: entry.id, reason: 'new' });
+    _notifyNewWork();
+  } catch (err) {
+    if (err?.name === 'QuotaExceededError') {
+      emit('error', { id: id, reason: 'insufficient-storage', willRetry: false });
+      return;
+    } else {
+      emit('error', { id: id, reason: (err?.message ?? err), willRetry: false });
+    }
+  }
 }
 
 /**
@@ -216,9 +225,9 @@ export async function registerFiles(entries) {
     throw new Error('registerFiles expects an array.');
   }
 
-  const incomingIds  = new Set(entries.map((e) => e.id));
-  const existingAll  = await dbGetAll(STORES.REGISTRY);
-  const removed      = [];
+  const incomingIds = new Set(entries.map((e) => e.id));
+  const existingAll = await dbGetAll(STORES.REGISTRY);
+  const removed = [];
 
   for (const existing of existingAll) {
     if (!incomingIds.has(existing.id) && !existing.protected) {
@@ -237,6 +246,32 @@ export async function registerFiles(entries) {
 }
 
 /**
+ * Updates the metadata in the registry. Adds to, doesn't replace it. Pass in an empty object to clear as null will be ignored.
+ * @param {string} id The of the registry record to update.
+ * @param {Object} metadata The metadata object to merge.
+ * @returns {Promise<void>}
+ */
+export async function updateRegistryMetadata(id, metadata) {
+  try {
+    if (id && metadata) {
+      const existing = await dbGet(STORES.REGISTRY, entry.id);
+
+      if (existing) {
+        existing.metadata = { ...(existing.metadata ?? {}), ...metadata };
+        await dbPut(STORES.REGISTRY, existing);
+      }
+    }
+  } catch (err) {
+    if (err?.name === 'QuotaExceededError') {
+      emit('error', { id: id, reason: 'insufficient-storage', willRetry: false });
+      return;
+    } else {
+      emit('error', { id: id, reason: (err?.message ?? err), willRetry: false });
+    }
+  }
+}
+
+/**
  * Checks all complete queue entries against their TTL and flips any that have
  * expired to `expired` status, queuing them for re-download.
  *
@@ -244,8 +279,8 @@ export async function registerFiles(entries) {
  * @returns {Promise<string[]>} IDs of entries that were marked expired
  */
 export async function evaluateExpiry() {
-  const allQueue    = await dbGetAll(STORES.DOWNLOAD_QUEUE);
-  const expiredIds  = [];
+  const allQueue = await dbGetAll(STORES.DOWNLOAD_QUEUE);
+  const expiredIds = [];
 
   for (const entry of allQueue) {
     if (entry.status === DOWNLOAD_STATUS.COMPLETE && isExpired(entry.expiresAt)) {
@@ -281,30 +316,30 @@ export async function getAllStatus() {
       const queue = queueMap.get(reg.id) ?? null;
       return {
         // Registry fields
-        id:          reg.id,
+        id: reg.id,
         downloadUrl: reg.downloadUrl,
-        mimeType:    reg.mimeType, // null means infer at download time
-        version:     reg.version,
-        protected:   reg.protected,
-        priority:    reg.priority,
-        ttl:         reg.ttl,
-        totalBytes:  reg.totalBytes,
-        metadata:    reg.metadata,
+        mimeType: reg.mimeType, // null means infer at download time
+        version: reg.version,
+        protected: reg.protected,
+        priority: reg.priority,
+        ttl: reg.ttl,
+        totalBytes: reg.totalBytes,
+        metadata: reg.metadata,
         registeredAt: reg.registeredAt,
-        updatedAt:    reg.updatedAt,
+        updatedAt: reg.updatedAt,
         // Queue fields
-        downloadStatus:  queue?.status          ?? null,
+        downloadStatus: queue?.status ?? null,
         bytesDownloaded: queue?.bytesDownloaded ?? 0,
-        storedBytes:     queue?.data?.length    ?? null,
-        progress:        (queue?.totalBytes && queue?.bytesDownloaded)
+        storedBytes: queue?.data?.length ?? null,
+        progress: (queue?.totalBytes && queue?.bytesDownloaded)
           ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
           : null,
-        retryCount:      queue?.retryCount      ?? 0,
-        lastAttemptAt:   queue?.lastAttemptAt   ?? null,
-        errorMessage:    queue?.errorMessage    ?? null,
-        deferredReason:  queue?.deferredReason  ?? null,
-        completedAt:     queue?.completedAt     ?? null,
-        expiresAt:       queue?.expiresAt       ?? null,
+        retryCount: queue?.retryCount ?? 0,
+        lastAttemptAt: queue?.lastAttemptAt ?? null,
+        errorMessage: queue?.errorMessage ?? null,
+        deferredReason: queue?.deferredReason ?? null,
+        completedAt: queue?.completedAt ?? null,
+        expiresAt: queue?.expiresAt ?? null,
       };
     })
     .sort((a, b) => a.priority - b.priority);
@@ -312,11 +347,11 @@ export async function getAllStatus() {
   return {
     items,
     storage: {
-      usageBytes:       storageEstimate.usage,
-      quotaBytes:       storageEstimate.quota,
-      availableBytes:   storageEstimate.available,
-      usageFormatted:   formatBytes(storageEstimate.usage),
-      quotaFormatted:   formatBytes(storageEstimate.quota),
+      usageBytes: storageEstimate.usage,
+      quotaBytes: storageEstimate.quota,
+      availableBytes: storageEstimate.available,
+      usageFormatted: formatBytes(storageEstimate.usage),
+      quotaFormatted: formatBytes(storageEstimate.quota),
       availableFormatted: formatBytes(storageEstimate.available),
     },
   };
@@ -338,29 +373,29 @@ export async function getStatus(id) {
   if (!reg) return null;
 
   return {
-    id:          reg.id,
+    id: reg.id,
     downloadUrl: reg.downloadUrl,
-    mimeType:    reg.mimeType ?? null,
-    version:     reg.version,
-    protected:   reg.protected,
-    priority:    reg.priority,
-    ttl:         reg.ttl,
-    totalBytes:  reg.totalBytes,
-    metadata:    reg.metadata,
+    mimeType: reg.mimeType ?? null,
+    version: reg.version,
+    protected: reg.protected,
+    priority: reg.priority,
+    ttl: reg.ttl,
+    totalBytes: reg.totalBytes,
+    metadata: reg.metadata,
     registeredAt: reg.registeredAt,
-    updatedAt:    reg.updatedAt,
-    downloadStatus:  queue?.status          ?? null,
+    updatedAt: reg.updatedAt,
+    downloadStatus: queue?.status ?? null,
     bytesDownloaded: queue?.bytesDownloaded ?? 0,
-    storedBytes:     queue?.data?.length      ?? null,
-    progress:        (queue?.totalBytes && queue?.bytesDownloaded)
+    storedBytes: queue?.data?.length ?? null,
+    progress: (queue?.totalBytes && queue?.bytesDownloaded)
       ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
       : null,
-    retryCount:      queue?.retryCount      ?? 0,
-    lastAttemptAt:   queue?.lastAttemptAt   ?? null,
-    errorMessage:    queue?.errorMessage    ?? null,
-    deferredReason:  queue?.deferredReason  ?? null,
-    completedAt:     queue?.completedAt     ?? null,
-    expiresAt:       queue?.expiresAt       ?? null,
+    retryCount: queue?.retryCount ?? 0,
+    lastAttemptAt: queue?.lastAttemptAt ?? null,
+    errorMessage: queue?.errorMessage ?? null,
+    deferredReason: queue?.deferredReason ?? null,
+    completedAt: queue?.completedAt ?? null,
+    expiresAt: queue?.expiresAt ?? null,
   };
 }
 

@@ -122,6 +122,7 @@ export async function dbPut(storeName, record) {
     const req = db.transaction(storeName, 'readwrite').objectStore(storeName).put(record);
     req.onsuccess = () => resolve();
     req.onerror  = () => reject(req.error);
+    req.onerror  = () => reject(req.error);
   });
 }
 

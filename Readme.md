@@ -177,6 +177,9 @@ Registers an array of files and removes any non-protected entries absent from th
 const { registered, removed } = await ODM.registerFiles([...]);
 ```
 
+#### `updateRegistryMetadata(id, metadata)`
+Updates the metadata in the registry. Adds to, doesn't replace it. Pass in an empty object to clear as null will be ignored.
+
 ---
 
 ### Download loop

@@ -109,6 +109,7 @@
 import {
   registerFile,
   registerFiles,
+  updateRegistryMetadata,
   getAllStatus,
   getStatus,
   isReady,
@@ -395,6 +396,7 @@ export default OfflineDataManager;
 export {
   registerFile,
   registerFiles,
+  updateRegistryMetadata,
   startDownloads,
   stopDownloads,
   retryFailed,
