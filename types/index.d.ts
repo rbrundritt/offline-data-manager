@@ -14,6 +14,7 @@ declare namespace OfflineDataManager {
     export { stopMonitoring };
     export { isOnline };
     export { isMonitoring };
+    export { updateConnectivityStatus };
     export { retrieve };
     export { getAllStatus };
     export { getStatus };
@@ -40,6 +41,7 @@ import { startMonitoring } from './downloader.js';
 import { stopMonitoring } from './downloader.js';
 import { isOnline } from './downloader.js';
 import { isMonitoring } from './downloader.js';
+import { updateConnectivityStatus } from './connectivity.js';
 /**
  * Retrieves the stored file data for a registered file.
  * Returns the array buffer and content type.
@@ -69,4 +71,4 @@ import { requestPersistentStorage } from './storage.js';
 import { isPersistentStorage } from './storage.js';
 import { setDBInfo } from './db.js';
 import { dbGetAllIds } from './db.js';
-export { registerFile, registerFiles, updateRegistryMetadata, startDownloads, stopDownloads, retryFailed, isDownloading, abortDownload, abortAllDownloads, startMonitoring, stopMonitoring, isOnline, isMonitoring, getAllStatus, getStatus, isReady, deleteFile, deleteAllFiles, on, off, once, emit, getStorageEstimate, requestPersistentStorage, isPersistentStorage };
+export { registerFile, registerFiles, updateRegistryMetadata, startDownloads, stopDownloads, retryFailed, isDownloading, abortDownload, abortAllDownloads, startMonitoring, stopMonitoring, isOnline, isMonitoring, updateConnectivityStatus, getAllStatus, getStatus, isReady, deleteFile, deleteAllFiles, on, off, once, emit, getStorageEstimate, requestPersistentStorage, isPersistentStorage };

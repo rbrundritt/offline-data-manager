@@ -20,6 +20,7 @@ A service-worker-friendly library for registering, downloading, and storing file
   - Files larger than 5MB are downloaded in 2MB chunks and merged back together when all chunks have been downloaded. This allows for downloads to be interupted and continue without having to start over from the beginning. This is useful if the user refreshes the page or leaves and comes back later.
   - If a download fails, the retry option will attempt to redownload the data using an expotential backoff method up to 5 tries.
   - Online/Offline state is monitored. Downloads are paused and resumed based on the state.
+    - Only enabled when running in the main window, not in workers. You can however monitor online/offline in your main window, then post update messages to your worker, then call `updateConnectivityStatus` with the status.
   - Storage limits are monitored and not exceed. This information is also easily retrievable.
 
 > [!TIP]
@@ -251,6 +252,15 @@ Emits a `'connectivity'` event `{ online: boolean }` on every change. `navigator
 ```js
 ODM.isOnline();     // → boolean (navigator.onLine)
 ODM.isMonitoring(); // → boolean
+```
+
+#### `updateConnectivityStatus(online)`
+
+A manual override option for setting the online/offline status. Useful when running this solution in a worker that doesn't have access to the window event for monitoring this status. Mointoring can be done using the online/offline events in the window, and the status sent to the `updateConnectivityStatus` to have downloads paused and resumed.
+
+```js
+ODM.updateConnectivityStatus(true); //Is online
+ODM.updateConnectivityStatus(false); //Is offline
 ```
 
 ---

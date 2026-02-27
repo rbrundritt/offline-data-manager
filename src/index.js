@@ -115,6 +115,8 @@ import {
   isReady,
 } from './registry.js';
 
+import { updateConnectivityStatus } from './connectivity.js';
+
 import {
   startDownloads,
   stopDownloads,
@@ -294,6 +296,13 @@ const OfflineDataManager = {
    */
   isMonitoring,
 
+  /**
+ * A manual override option for setting the online/offline status. 
+ * seful when running this solution in a worker that doesn't have access to the window event for monitoring this status.
+ * @param {boolean} online True if online, false otherwise.
+ */
+  updateConnectivityStatus,
+
   // ── Retrieve ─────────────────────────────────────────────────────────────────
 
   /**
@@ -407,6 +416,7 @@ export {
   stopMonitoring,
   isOnline,
   isMonitoring,
+  updateConnectivityStatus,
   retrieve,
   getAllStatus,
   getStatus,

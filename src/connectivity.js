@@ -26,9 +26,10 @@
 import { emit } from './events.js';
 
 // Injected by startConnectivityMonitor — avoids a circular import with downloader.js
-let _pauseAll  = null;
+let _pauseAll = null;
 let _resumeAll = null;
 let _monitoring = false;
+let _online = true;
 
 function handleOffline() {
   emit('connectivity', { online: false });
@@ -43,6 +44,7 @@ function handleOnline() {
 /**
  * Starts monitoring window online/offline events.
  * Downloads are paused when offline and resumed when online.
+ * If running in a worker, this will be ignored since "window" is not available.
  *
  * @param {object} handlers
  * @param {Function} handlers.pauseAll  — called when offline; should abort active downloads
@@ -50,22 +52,28 @@ function handleOnline() {
  */
 export function startConnectivityMonitor({ pauseAll, resumeAll }) {
   if (_monitoring) return;
-  _pauseAll  = pauseAll;
+  _pauseAll = pauseAll;
   _resumeAll = resumeAll;
-  window.addEventListener('offline', handleOffline);
-  window.addEventListener('online',  handleOnline);
+  if (window) {
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+  }
   _monitoring = true;
 }
 
 /**
  * Stops monitoring and removes event listeners.
  * After calling this, online/offline events will no longer trigger pause/resume.
+ * If running in a worker, this will be ignored since "window" is not available.
  */
 export function stopConnectivityMonitor() {
-  window.removeEventListener('offline', handleOffline);
-  window.removeEventListener('online',  handleOnline);
-  _pauseAll   = null;
-  _resumeAll  = null;
+  if (globalThis.window) {
+    window.removeEventListener('offline', handleOffline);
+    window.removeEventListener('online', handleOnline);
+  }
+
+  _pauseAll = null;
+  _resumeAll = null;
   _monitoring = false;
 }
 
@@ -76,7 +84,11 @@ export function stopConnectivityMonitor() {
  * @returns {boolean}
  */
 export function isOnline() {
-  return navigator.onLine ?? true;
+  if (globalThis.window) {
+    return navigator.onLine ?? true;
+  }
+
+  return _online;
 }
 
 /**
@@ -85,4 +97,21 @@ export function isOnline() {
  */
 export function isMonitoring() {
   return _monitoring;
+}
+
+/**
+ * A manual override option for setting the online/offline status. 
+ * seful when running this solution in a worker that doesn't have access to the window event for monitoring this status.
+ * @param {boolean} online True if online, false otherwise.
+ */
+export function updateConnectivityStatus(online) {
+  _online = online;
+
+  if (_monitoring) {
+    if (_online) {
+      _resumeAll?.();
+    } else {
+      _pauseAll?.();
+    }
+  }
 }

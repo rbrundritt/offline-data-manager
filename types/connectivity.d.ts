@@ -1,6 +1,7 @@
 /**
  * Starts monitoring window online/offline events.
  * Downloads are paused when offline and resumed when online.
+ * If running in a worker, this will be ignored since "window" is not available.
  *
  * @param {object} handlers
  * @param {Function} handlers.pauseAll  — called when offline; should abort active downloads
@@ -13,6 +14,7 @@ export function startConnectivityMonitor({ pauseAll, resumeAll }: {
 /**
  * Stops monitoring and removes event listeners.
  * After calling this, online/offline events will no longer trigger pause/resume.
+ * If running in a worker, this will be ignored since "window" is not available.
  */
 export function stopConnectivityMonitor(): void;
 /**
@@ -27,3 +29,9 @@ export function isOnline(): boolean;
  * @returns {boolean}
  */
 export function isMonitoring(): boolean;
+/**
+ * A manual override option for setting the online/offline status.
+ * seful when running this solution in a worker that doesn't have access to the window event for monitoring this status.
+ * @param {boolean} online True if online, false otherwise.
+ */
+export function updateConnectivityStatus(online: boolean): void;
