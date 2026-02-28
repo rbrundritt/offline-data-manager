@@ -17,6 +17,15 @@
  *   metadata:     object   — arbitrary caller-supplied key/value pairs (labels, descriptions, etc.)
  *   registeredAt: number   — timestamp (ms)
  *   updatedAt:    number   — timestamp of last metadata update (ms)
+ *   // Mirrored status fields (kept in sync with downloadQueue by syncStatusToRegistry)
+ *   status:          string|null
+ *   bytesDownloaded: number
+ *   retryCount:      number
+ *   lastAttemptAt:   number|null
+ *   errorMessage:    string|null
+ *   deferredReason:  string|null
+ *   completedAt:     number|null
+ *   expiresAt:       number|null
  * }
  *
  * Download queue entry shape:
@@ -110,6 +119,18 @@ function makeQueueEntry(id) {
 }
 
 /**
+ * Patches status fields onto the registry record so status reads
+ * only need to query the registry store, never the download queue.
+ * Exported so downloader.js can call it via updateQueue.
+ * @param {string} id
+ * @param {object} patch
+ */
+export async function syncStatusToRegistry(id, patch) {
+  const reg = await dbGet(STORES.REGISTRY, id);
+  if (reg) await dbPut(STORES.REGISTRY, { ...reg, ...patch });
+}
+
+/**
  * Computes the expiresAt timestamp from a completedAt time and a ttl (seconds).
  * Returns null if ttl is absent, zero, or falsy (meaning never expires).
  *
@@ -165,6 +186,17 @@ export async function registerFile(entry) {
       metadata: entry.metadata ?? {},
       registeredAt: existing?.registeredAt ?? now,
       updatedAt: now,
+      // Status fields — only stamped on new entries; version-bump branch handles its own reset below
+      ...(existing ? {} : {
+        status: DOWNLOAD_STATUS.PENDING,
+        bytesDownloaded: 0,
+        retryCount: 0,
+        lastAttemptAt: null,
+        errorMessage: null,
+        deferredReason: null,
+        completedAt: null,
+        expiresAt: null,
+      }),
     };
 
     if (existing) {
@@ -188,6 +220,18 @@ export async function registerFile(entry) {
           : makeQueueEntry(entry.id);
 
         await dbPut(STORES.DOWNLOAD_QUEUE, newQueueEntry);
+
+        // Reset status fields on the registry record for the version bump
+        await syncStatusToRegistry(entry.id, {
+          status: DOWNLOAD_STATUS.PENDING,
+          bytesDownloaded: 0,
+          retryCount: 0,
+          errorMessage: null,
+          deferredReason: null,
+          completedAt: null,
+          expiresAt: null,
+        });
+
         emit('registered', { id: entry.id, reason: 'version-updated' });
         _notifyNewWork();
       }
@@ -288,6 +332,7 @@ export async function evaluateExpiry() {
         ...entry,
         status: DOWNLOAD_STATUS.EXPIRED,
       });
+      await syncStatusToRegistry(entry.id, { status: DOWNLOAD_STATUS.EXPIRED });
       expiredIds.push(entry.id);
       emit('expired', { id: entry.id });
     }
@@ -298,50 +343,19 @@ export async function evaluateExpiry() {
 
 /**
  * Returns a merged view of all registry entries with their current download
- * state, plus a storage summary.
+ * state, plus a storage summary. Status fields are read directly from the
+ * registry — the download queue is not consulted.
  *
  * @returns {Promise<{ items: object[], storage: object }>}
  */
 export async function getAllStatus() {
-  const [registryEntries, queueEntries, storageEstimate] = await Promise.all([
+  const [registryEntries, storageEstimate] = await Promise.all([
     dbGetAll(STORES.REGISTRY),
-    dbGetAll(STORES.DOWNLOAD_QUEUE),
     getStorageEstimate(),
   ]);
 
-  const queueMap = new Map(queueEntries.map((q) => [q.id, q]));
-
   const items = registryEntries
-    .map((reg) => {
-      const queue = queueMap.get(reg.id) ?? null;
-      return {
-        // Registry fields
-        id: reg.id,
-        downloadUrl: reg.downloadUrl,
-        mimeType: reg.mimeType, // null means infer at download time
-        version: reg.version,
-        protected: reg.protected,
-        priority: reg.priority,
-        ttl: reg.ttl,
-        totalBytes: reg.totalBytes,
-        metadata: reg.metadata,
-        registeredAt: reg.registeredAt,
-        updatedAt: reg.updatedAt,
-        // Queue fields
-        downloadStatus: queue?.status ?? null,
-        bytesDownloaded: queue?.bytesDownloaded ?? 0,
-        storedBytes: queue?.data?.length ?? null,
-        progress: (queue?.totalBytes && queue?.bytesDownloaded)
-          ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
-          : null,
-        retryCount: queue?.retryCount ?? 0,
-        lastAttemptAt: queue?.lastAttemptAt ?? null,
-        errorMessage: queue?.errorMessage ?? null,
-        deferredReason: queue?.deferredReason ?? null,
-        completedAt: queue?.completedAt ?? null,
-        expiresAt: queue?.expiresAt ?? null,
-      };
-    })
+    .map((reg) => processStatus(reg))
     .sort((a, b) => a.priority - b.priority);
 
   return {
@@ -359,19 +373,25 @@ export async function getAllStatus() {
 
 /**
  * Returns the full merged status object for a single registered file,
- * or null if not registered.
+ * or null if not registered. Status fields are read directly from the
+ * registry — the download queue is not consulted.
  *
  * @param {string} id
  * @returns {Promise<object|null>}
  */
 export async function getStatus(id) {
-  const [reg, queue] = await Promise.all([
-    dbGet(STORES.REGISTRY, id),
-    dbGet(STORES.DOWNLOAD_QUEUE, id),
-  ]);
-
+  const reg = await dbGet(STORES.REGISTRY, id);
   if (!reg) return null;
 
+  return processStatus(reg);
+}
+
+/**
+ * Takes a registry entry and processes it to create a status response.
+ * @param {*} reg The registry item.
+ * @returns The enhanced status information for the registry.
+ */
+function processStatus(reg) {
   return {
     id: reg.id,
     downloadUrl: reg.downloadUrl,
@@ -384,18 +404,18 @@ export async function getStatus(id) {
     metadata: reg.metadata,
     registeredAt: reg.registeredAt,
     updatedAt: reg.updatedAt,
-    downloadStatus: queue?.status ?? null,
-    bytesDownloaded: queue?.bytesDownloaded ?? 0,
-    storedBytes: queue?.data?.length ?? null,
-    progress: (queue?.totalBytes && queue?.bytesDownloaded)
-      ? Math.round((queue.bytesDownloaded / queue.totalBytes) * 100)
+    // Mirrored status fields
+    downloadStatus: reg.status ?? null,
+    bytesDownloaded: reg.bytesDownloaded ?? 0,
+    progress: (reg.totalBytes && reg.bytesDownloaded)
+      ? Math.round((reg.bytesDownloaded / reg.totalBytes) * 100)
       : null,
-    retryCount: queue?.retryCount ?? 0,
-    lastAttemptAt: queue?.lastAttemptAt ?? null,
-    errorMessage: queue?.errorMessage ?? null,
-    deferredReason: queue?.deferredReason ?? null,
-    completedAt: queue?.completedAt ?? null,
-    expiresAt: queue?.expiresAt ?? null,
+    retryCount: reg.retryCount ?? 0,
+    lastAttemptAt: reg.lastAttemptAt ?? null,
+    errorMessage: reg.errorMessage ?? null,
+    deferredReason: reg.deferredReason ?? null,
+    completedAt: reg.completedAt ?? null,
+    expiresAt: reg.expiresAt ?? null,
   };
 }
 
@@ -407,6 +427,11 @@ export async function getStatus(id) {
  * @returns {Promise<boolean>}
  */
 export async function isReady(id) {
+  const reg = await dbGet(STORES.REGISTRY, id);
+  if (reg?.status) {
+    return READY_STATUSES.has(reg?.status);
+  }
+
   const queue = await dbGet(STORES.DOWNLOAD_QUEUE, id);
   return READY_STATUSES.has(queue?.status);
 }

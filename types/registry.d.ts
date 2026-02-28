@@ -1,4 +1,12 @@
 /**
+ * Patches status fields onto the registry record so status reads
+ * only need to query the registry store, never the download queue.
+ * Exported so downloader.js can call it via updateQueue.
+ * @param {string} id
+ * @param {object} patch
+ */
+export function syncStatusToRegistry(id: string, patch: object): Promise<void>;
+/**
  * Computes the expiresAt timestamp from a completedAt time and a ttl (seconds).
  * Returns null if ttl is absent, zero, or falsy (meaning never expires).
  *
@@ -56,7 +64,8 @@ export function updateRegistryMetadata(id: string, metadata: Object): Promise<vo
 export function evaluateExpiry(): Promise<string[]>;
 /**
  * Returns a merged view of all registry entries with their current download
- * state, plus a storage summary.
+ * state, plus a storage summary. Status fields are read directly from the
+ * registry — the download queue is not consulted.
  *
  * @returns {Promise<{ items: object[], storage: object }>}
  */
@@ -66,7 +75,8 @@ export function getAllStatus(): Promise<{
 }>;
 /**
  * Returns the full merged status object for a single registered file,
- * or null if not registered.
+ * or null if not registered. Status fields are read directly from the
+ * registry — the download queue is not consulted.
  *
  * @param {string} id
  * @returns {Promise<object|null>}

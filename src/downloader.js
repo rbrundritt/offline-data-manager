@@ -24,7 +24,7 @@
  */
 
 import { dbGet, dbGetAll, dbPut, STORES } from './db.js';
-import { DOWNLOAD_STATUS, evaluateExpiry, computeExpiresAt } from './registry.js';
+import { DOWNLOAD_STATUS, evaluateExpiry, computeExpiresAt, syncStatusToRegistry } from './registry.js';
 import { emit } from './events.js';
 import { hasEnoughSpace } from './storage.js';
 import { startConnectivityMonitor, isOnline } from './connectivity.js';
@@ -67,9 +67,22 @@ export function _notifyNewWork() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const backoffDelay = (n) => BACKOFF_BASE_MS * Math.pow(2, n);
 
+/**
+ * Patches a download queue entry and mirrors the same patch onto the registry
+ * record so status reads never need to touch the download queue.
+ * The `data` field is intentionally excluded from the registry mirror since
+ * it is a large ArrayBuffer and the registry is status-only.
+ */
 async function updateQueue(id, patch) {
   const entry = await dbGet(STORES.DOWNLOAD_QUEUE, id);
-  if (entry) await dbPut(STORES.DOWNLOAD_QUEUE, { ...entry, ...patch });
+  if (!entry) return;
+  await dbPut(STORES.DOWNLOAD_QUEUE, { ...entry, ...patch });
+
+  // Mirror all fields except `data` onto the registry record
+  const { data: _omit, ...statusPatch } = patch;
+  if (Object.keys(statusPatch).length > 0) {
+    await syncStatusToRegistry(id, statusPatch);
+  }
 }
 
 /**
@@ -190,6 +203,7 @@ async function downloadSingleFile(registryEntry) {
         mimeType,
         bytesDownloaded: data.byteLength,
         byteOffset: data.byteLength,
+        storedBytes: data?.byteLength,
         completedAt,
         expiresAt,
         errorMessage: null,
