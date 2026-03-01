@@ -34,18 +34,14 @@ export function isExpired(expiresAt: number | null): boolean;
  */
 export function registerFile(entry: object): Promise<void>;
 /**
- * Registers an array of file entries and removes any registry entries
- * whose IDs are no longer present in the incoming array.
- *
- * Protected entries missing from the new list are left untouched.
- * Non-protected entries missing from the new list are fully removed.
+ * Registers an array of file entries.
+ * If a registry item is already registered, the version will be checked to see if there is new information.
  *
  * @param {object[]} entries
- * @returns {Promise<{ registered: string[], removed: string[] }>}
+ * @returns {Promise<{ registered: string[] }>}
  */
 export function registerFiles(entries: object[]): Promise<{
     registered: string[];
-    removed: string[];
 }>;
 /**
  * Updates the metadata in the registry. Adds to, doesn't replace it. Pass in an empty object to clear as null will be ignored.

@@ -255,38 +255,22 @@ export async function registerFile(entry) {
 }
 
 /**
- * Registers an array of file entries and removes any registry entries
- * whose IDs are no longer present in the incoming array.
- *
- * Protected entries missing from the new list are left untouched.
- * Non-protected entries missing from the new list are fully removed.
+ * Registers an array of file entries. 
+ * If a registry item is already registered, the version will be checked to see if there is new information.
  *
  * @param {object[]} entries
- * @returns {Promise<{ registered: string[], removed: string[] }>}
+ * @returns {Promise<{ registered: string[] }>}
  */
 export async function registerFiles(entries) {
   if (!Array.isArray(entries)) {
     throw new Error('registerFiles expects an array.');
   }
 
-  const incomingIds = new Set(entries.map((e) => e.id));
-  const existingAll = await dbGetAll(STORES.REGISTRY);
-  const removed = [];
-
-  for (const existing of existingAll) {
-    if (!incomingIds.has(existing.id) && !existing.protected) {
-      await dbDelete(STORES.REGISTRY, existing.id);
-      await dbDelete(STORES.DOWNLOAD_QUEUE, existing.id);
-      removed.push(existing.id);
-      emit('deleted', { id: existing.id, registryRemoved: true });
-    }
-  }
-
   for (const entry of entries) {
     await registerFile(entry);
   }
 
-  return { registered: entries.map((e) => e.id), removed };
+  return { registered: entries.map((e) => e.id) };
 }
 
 /**
