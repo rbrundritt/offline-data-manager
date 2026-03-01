@@ -1,6 +1,6 @@
 {
   "name": "offline-data-manager",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "Service-worker-friendly offline file download and storage manager for JavaScript.",
   "type": "module",
   "main": "dist/umd/offline-data-manager.js",

@@ -28,6 +28,7 @@ import { DOWNLOAD_STATUS, evaluateExpiry, computeExpiresAt, syncStatusToRegistry
 import { emit } from './events.js';
 import { hasEnoughSpace } from './storage.js';
 import { startConnectivityMonitor, isOnline } from './connectivity.js';
+import { getMimeType } from './mimeTypes.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -163,6 +164,8 @@ async function downloadSingleFile(registryEntry) {
 
       let supportsRange = false;
       let totalBytes = queueEntry?.totalBytes ?? registryEntry.totalBytes ?? null;
+
+      //See if user specified the mime type in the registry info.
       let resolvedMimeType = registryEntry.mimeType ?? null;
 
       if (byteOffset === 0) {
@@ -172,6 +175,8 @@ async function downloadSingleFile(registryEntry) {
           totalBytes = probe.totalBytes;
           await updateQueue(id, { totalBytes });
         }
+
+        //See if there is mime type info in the file header we can capture.
         if (!resolvedMimeType && probe.mimeType) {
           resolvedMimeType = probe.mimeType;
         }
@@ -191,8 +196,11 @@ async function downloadSingleFile(registryEntry) {
         responseMimeType = result.mimeType;
       }
 
+      //If we still don't have the mime type, try inspecting the download url for a file extention. Defaults to 'application/octet-stream'
+      let fileNameMimeType = getMimeType(downloadUrl);
+
       // uint8.buffer gives us the underlying ArrayBuffer
-      const mimeType = resolvedMimeType ?? responseMimeType ?? 'application/octet-stream';
+      const mimeType = resolvedMimeType ?? responseMimeType ?? fileNameMimeType;
       const data = uint8.buffer;
       const completedAt = Date.now();
       const expiresAt = computeExpiresAt(completedAt, ttl);
